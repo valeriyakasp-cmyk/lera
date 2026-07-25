@@ -1,0 +1,4 @@
+# dtrace-provider is an optional native dependency of the eas-cli logger.
+# Its build script is not needed, so skip it rather than prompt on every install.
+ignoredBuiltDependencies:
+  - dtrace-provider

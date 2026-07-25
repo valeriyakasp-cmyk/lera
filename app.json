@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "BizFlow",
+    "slug": "bizflow-valeriya",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.valeriya.bizflow",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "package": "com.valeriya.bizflow"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "5dbf67d4-a3db-4bcc-8de2-3ef3aabff009"
+      }
+    },
+    "owner": "lera2004",
+    "updates": {
+      "url": "https://u.expo.dev/5dbf67d4-a3db-4bcc-8de2-3ef3aabff009"
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}

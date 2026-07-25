@@ -1,0 +1,7 @@
+node_modules/
+.expo/
+dist*/
+*.log
+.DS_Store
+BizFlow-Expo-Go-QR.png
+BizFlow-Native-Expo-Go-QR.png
