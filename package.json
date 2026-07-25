@@ -7,6 +7,7 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "build:hosted": "node scripts/build-hosted.mjs",
     "publish:preview": "eas update --branch preview --message \"BizFlow preview\""
   },
   "dependencies": {
