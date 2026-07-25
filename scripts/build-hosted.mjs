@@ -76,6 +76,10 @@ const preamble =
   "m.content='width=device-width, initial-scale=1, viewport-fit=cover';" +
   "document.documentElement.lang='he';window.__resources={};})();";
 
+// Hosted-only additions: home-screen install, durable storage, backup.
+const sidecar = await read("scripts/hosted-sidecar.js");
+if (/<\/script/i.test(sidecar)) throw new Error("sidecar would terminate its script tag early");
+
 const page = [
   "<style>",
   faces.join(""),
@@ -86,6 +90,7 @@ const page = [
   "<script>", reactDom, "</script>",
   "<script>", support, "</script>",
   markup,
+  "<script>", sidecar, "</script>",
 ].join("\n");
 
 await mkdir(dirname(out), { recursive: true });
