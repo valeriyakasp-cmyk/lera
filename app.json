@@ -1,40 +1,36 @@
 {
   "expo": {
     "name": "BizFlow",
-    "slug": "bizflow",
-    "scheme": "bizflow",
+    "slug": "bizflow-valeriya",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#FBFAF8"
-    },
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.bizflow.app"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.valeriya.bizflow",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
-      "package": "com.bizflow.app",
-      "adaptiveIcon": {
-        "backgroundColor": "#FBFAF8",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
+      "edgeToEdgeEnabled": true,
+      "package": "com.valeriya.bizflow"
     },
-    "web": {
-      "bundler": "metro",
-      "output": "single",
-      "favicon": "./assets/favicon.png"
+    "extra": {
+      "eas": {
+        "projectId": "5dbf67d4-a3db-4bcc-8de2-3ef3aabff009"
+      }
     },
-    "plugins": ["expo-router", "expo-font"],
-    "experiments": {
-      "typedRoutes": false
-    }
+    "owner": "lera2004",
+    "updates": {
+      "url": "https://u.expo.dev/5dbf67d4-a3db-4bcc-8de2-3ef3aabff009"
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }
