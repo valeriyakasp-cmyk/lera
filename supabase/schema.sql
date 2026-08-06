@@ -30,6 +30,14 @@ create table if not exists public.tasks (
 -- ------------------------------------------------------------
 alter table public.tasks add column if not exists status text;
 
+-- שיוך ללקוח, שעת ביצוע מתוכננת, ומדידת זמן בפועל
+alter table public.tasks add column if not exists client      text;
+alter table public.tasks add column if not exists planned_at  text;   -- 'HH:MM'
+alter table public.tasks add column if not exists started_at  timestamptz;
+alter table public.tasks add column if not exists finished_at timestamptz;
+
+create index if not exists tasks_user_client_idx on public.tasks (user_id, client);
+
 do $$
 begin
   if not exists (
@@ -84,4 +92,104 @@ $$;
 drop trigger if exists tasks_touch_updated_at on public.tasks;
 create trigger tasks_touch_updated_at
   before update on public.tasks
+  for each row execute function public.touch_updated_at();
+
+-- ============================================================
+--  מנויים והוצאות — בקרה על ההוצאות החודשיות
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- מנויים קבועים (סונו, מיד'ג'רני וכו'). הרשומה הזאת היא ההגדרה
+-- של המנוי — כמה הוא עולה ומתי הוא מחויב. החיובים עצמם נשמרים
+-- בטבלת expenses, כדי שביטול מנוי לא ימחק את מה שכבר שולם.
+-- ------------------------------------------------------------
+create table if not exists public.subscriptions (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null default auth.uid()
+                 references auth.users (id) on delete cascade,
+  name         text    not null check (char_length(name) between 1 and 120),
+  amount       numeric(10,2) not null default 0,
+  billing_day  int     not null default 1 check (billing_day between 1 and 28),
+  active       boolean not null default true,
+  started_on   date,
+  cancelled_on date,
+  note         text,
+  position     double precision not null default 0,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+create index if not exists subs_user_idx on public.subscriptions (user_id, active);
+
+-- ------------------------------------------------------------
+-- הוצאות. שני סוגים:
+--   'subscription' — חיוב חודשי שנוצר אוטומטית ממנוי פעיל
+--   'oneoff'       — רכישה חד־פעמית, למשל קרדיטים נוספים
+-- ------------------------------------------------------------
+create table if not exists public.expenses (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null default auth.uid()
+                    references auth.users (id) on delete cascade,
+  spend_date      date not null,
+  title           text not null check (char_length(title) between 1 and 200),
+  amount          numeric(10,2) not null default 0,
+  kind            text not null default 'oneoff'
+                    check (kind in ('oneoff', 'subscription')),
+  subscription_id uuid references public.subscriptions (id) on delete set null,
+  period          text,     -- 'YYYY-MM' לחיוב מנוי, כדי למנוע כפילות
+  client          text,
+  note            text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create index if not exists expenses_user_date_idx on public.expenses (user_id, spend_date);
+
+-- חיוב אחד בלבד לכל מנוי בכל חודש
+create unique index if not exists expenses_sub_period_idx
+  on public.expenses (user_id, subscription_id, period)
+  where subscription_id is not null;
+
+-- ------------------------------------------------------------
+-- RLS לשתי הטבלאות החדשות
+-- ------------------------------------------------------------
+alter table public.subscriptions enable row level security;
+alter table public.expenses      enable row level security;
+
+drop policy if exists "subs_select_own" on public.subscriptions;
+drop policy if exists "subs_insert_own" on public.subscriptions;
+drop policy if exists "subs_update_own" on public.subscriptions;
+drop policy if exists "subs_delete_own" on public.subscriptions;
+
+create policy "subs_select_own" on public.subscriptions
+  for select using (auth.uid() = user_id);
+create policy "subs_insert_own" on public.subscriptions
+  for insert with check (auth.uid() = user_id);
+create policy "subs_update_own" on public.subscriptions
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "subs_delete_own" on public.subscriptions
+  for delete using (auth.uid() = user_id);
+
+drop policy if exists "expenses_select_own" on public.expenses;
+drop policy if exists "expenses_insert_own" on public.expenses;
+drop policy if exists "expenses_update_own" on public.expenses;
+drop policy if exists "expenses_delete_own" on public.expenses;
+
+create policy "expenses_select_own" on public.expenses
+  for select using (auth.uid() = user_id);
+create policy "expenses_insert_own" on public.expenses
+  for insert with check (auth.uid() = user_id);
+create policy "expenses_update_own" on public.expenses
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "expenses_delete_own" on public.expenses
+  for delete using (auth.uid() = user_id);
+
+drop trigger if exists subs_touch_updated_at on public.subscriptions;
+create trigger subs_touch_updated_at
+  before update on public.subscriptions
+  for each row execute function public.touch_updated_at();
+
+drop trigger if exists expenses_touch_updated_at on public.expenses;
+create trigger expenses_touch_updated_at
+  before update on public.expenses
   for each row execute function public.touch_updated_at();
