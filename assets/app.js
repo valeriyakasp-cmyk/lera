@@ -2090,7 +2090,7 @@ async function connect() {
   const { url, key } = state.cfg;
   if (!url || !key) { setStatus('local'); return false; }
   try {
-    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.45.4');
+    const { createClient } = await import('./supabase.js');
     state.sb = createClient(url, key, {
       auth: { persistSession: true, autoRefreshToken: true, storageKey: 'lera.auth' },
     });
