@@ -67,22 +67,16 @@
 
       <div class="stats" id="stats">
         <div class="stat">
-          <span class="stat__value" id="statOpen">0</span>
           <span class="stat__label">פתוחות</span>
+          <span class="stat__value" id="statOpen">0</span>
         </div>
         <div class="stat">
-          <span class="stat__value" id="statDone">0</span>
           <span class="stat__label">הושלמו</span>
+          <span class="stat__value"><span id="statDone">0</span><small id="statTotal">/0</small></span>
         </div>
-        <div class="stat stat--ring">
-          <div class="ring" id="ring" style="--p:0">
-            <svg viewBox="0 0 44 44" aria-hidden="true">
-              <circle class="ring__track" cx="22" cy="22" r="19"></circle>
-              <circle class="ring__fill" cx="22" cy="22" r="19"></circle>
-            </svg>
-            <span class="ring__num" id="statPct">0%</span>
-          </div>
+        <div class="stat">
           <span class="stat__label">התקדמות</span>
+          <span class="stat__value"><span id="statPct">0</span><small>%</small></span>
         </div>
       </div>
     </header>

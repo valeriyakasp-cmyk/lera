@@ -177,8 +177,8 @@ const el = {
   todayBtn:    $('#todayBtn'),
   statOpen:    $('#statOpen'),
   statDone:    $('#statDone'),
+  statTotal:   $('#statTotal'),
   statPct:     $('#statPct'),
-  ring:        $('#ring'),
   addForm:     $('#addForm'),
   addInput:    $('#addInput'),
   activeList:  $('#activeList'),
@@ -225,10 +225,10 @@ function render() {
 
   /* --- stats --- */
   const pct = rows.length ? Math.round(done.length / rows.length * 100) : 0;
-  el.statOpen.textContent = active.length;
-  el.statDone.textContent = done.length;
-  el.statPct.textContent  = pct + '%';
-  el.ring.style.setProperty('--p', pct);
+  el.statOpen.textContent  = active.length;
+  el.statDone.textContent  = done.length;
+  el.statTotal.textContent = '/' + rows.length;
+  el.statPct.textContent   = pct;
 
   /* --- lists --- */
   el.activeList.replaceChildren(...active.map(taskNode));
@@ -288,20 +288,16 @@ function taskNode(task) {
   });
   main.append(title);
 
-  if (total) {
-    const meta = document.createElement('div');
-    meta.className = 'task__meta';
-    const bar = document.createElement('div');
-    bar.className = 'mini';
-    bar.innerHTML = `<span style="width:${Math.round(doneN / total * 100)}%"></span>`;
-    const txt = document.createElement('span');
-    txt.textContent = `${doneN} מתוך ${total} תת־משימות`;
-    meta.append(bar, txt);
-    main.append(meta);
-  }
-
   const actions = document.createElement('div');
   actions.className = 'task__actions';
+
+  if (total) {
+    const count = document.createElement('span');
+    count.className = 'task__count';
+    count.textContent = `${doneN}/${total}`;
+    count.title = `${doneN} מתוך ${total} תת־משימות הושלמו`;
+    actions.append(count);
+  }
 
   const chev = document.createElement('button');
   chev.type = 'button';
