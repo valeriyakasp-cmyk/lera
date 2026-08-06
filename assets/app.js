@@ -106,6 +106,7 @@ function addTask(title) {
     title: title.trim(),
     done: false,
     completed_at: null,
+    status: null,        // null | 'doing' | 'waiting'
     collapsed: true,
     position: nextPosition(state.date),
     subtasks: [],
@@ -128,7 +129,20 @@ function setTaskDone(task, done) {
   task.done = done;
   task.completed_at = done ? new Date().toISOString() : null;
   task.subtasks = task.subtasks.map(s => ({ ...s, done }));
-  if (done) task.collapsed = true;
+  if (done) { task.collapsed = true; task.status = null; }
+  touch(task);
+}
+
+/** 'doing' | 'waiting' | null. Selecting the active status clears it. */
+function setTaskStatus(task, status) {
+  task.status = task.status === status ? null : status;
+  touch(task);
+}
+
+/** Reschedule to another day — appended to the end of the target day. */
+function moveTask(task, date) {
+  task.task_date = date;
+  task.position = Date.now();
   touch(task);
 }
 
@@ -143,6 +157,7 @@ function setSubDone(task, subId, done) {
     task.done = true;
     task.completed_at = new Date().toISOString();
     task.collapsed = true;
+    task.status = null;
   } else if (!all && task.done) {
     task.done = false;
     task.completed_at = null;
@@ -162,6 +177,7 @@ function deleteSub(task, subId) {
   if (task.subtasks.length && task.subtasks.every(s => s.done) && !task.done) {
     task.done = true;
     task.completed_at = new Date().toISOString();
+    task.status = null;
   }
   touch(task);
 }
@@ -188,7 +204,7 @@ const el = {
   doneCount:   $('#doneCount'),
   emptyState:  $('#emptyState'),
   carryover:   $('#carryover'),
-  carryCount:  $('#carryoverCount'),
+  carryText:   $('#carryoverText'),
   syncChip:    $('#syncChip'),
   footStatus:  $('#footStatus'),
   toast:       $('#toast'),
@@ -200,6 +216,15 @@ const ICON = {
   trash: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   x:     '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   plus:  '<svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  more:  '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></svg>',
+  cal:   '<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5" width="17" height="16" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  next:  '<svg viewBox="0 0 24 24" fill="none"><path d="M13 6l-6 6 6 6M17 6v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+/** Status vocabulary. `null` is the implicit "open" state and has no pill. */
+const STATUS = {
+  doing:   { label: 'בעבודה' },
+  waiting: { label: 'בהמתנה' },
 };
 
 /** Without a cloud connection the carry-over list comes from the local cache. */
@@ -210,6 +235,7 @@ function localEarlier() {
 }
 
 function render() {
+  closeMenu();   // the node it is anchored to is about to be replaced
   const rows   = byDate(state.date);
   const active = rows.filter(t => !t.done);
   const done   = rows.filter(t => t.done)
@@ -245,7 +271,9 @@ function render() {
   const carry = source.filter(t => t.task_date < state.date);
   state.earlier = source;
   el.carryover.hidden = !(isToday && carry.length);
-  el.carryCount.textContent = carry.length === 1 ? 'משימה אחת' : `${carry.length} משימות`;
+  el.carryText.innerHTML = carry.length === 1
+    ? '<strong>משימה אחת</strong> נשארה פתוחה מימים קודמים'
+    : `<strong>${carry.length} משימות</strong> נשארו פתוחות מימים קודמים`;
 }
 
 function taskNode(task) {
@@ -288,6 +316,14 @@ function taskNode(task) {
   });
   main.append(title);
 
+  if (task.status && !task.done) {
+    const pill = document.createElement('span');
+    pill.className = `status status--${task.status}`;
+    pill.innerHTML = '<span class="status__dot" aria-hidden="true"></span>';
+    pill.append(STATUS[task.status].label);
+    main.append(pill);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'task__actions';
 
@@ -312,18 +348,15 @@ function taskNode(task) {
     if (!task.collapsed) $(`.task[data-id="${task.id}"] .subadd input`)?.focus();
   });
 
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'task__btn task__btn--del';
-  del.setAttribute('aria-label', 'מחיקת המשימה');
-  del.innerHTML = ICON.trash;
-  del.addEventListener('click', () => {
-    deleteTask(task.id);
-    animateOut(li, render);
-    toast('המשימה נמחקה');
-  });
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'task__btn task__btn--more';
+  more.setAttribute('aria-label', 'אפשרויות למשימה');
+  more.setAttribute('aria-haspopup', 'menu');
+  more.innerHTML = ICON.more;
+  more.addEventListener('click', e => { e.stopPropagation(); openMenu(task, more); });
 
-  actions.append(chev, del);
+  actions.append(chev, more);
   row.append(check, main, actions);
   li.append(row);
 
@@ -416,6 +449,135 @@ function subNode(task, sub) {
   return div;
 }
 
+/* ============================================================
+   TASK MENU — status, reschedule, delete
+   ============================================================ */
+let menuEl = null;
+
+function closeMenu() {
+  if (!menuEl) return;
+  menuEl.remove();
+  menuEl = null;
+  document.removeEventListener('pointerdown', onOutside, true);
+  window.removeEventListener('resize', closeMenu);
+  window.removeEventListener('scroll', closeMenu, true);
+}
+const onOutside = e => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); };
+
+function openMenu(task, anchor) {
+  const wasOpen = menuEl?.dataset.for === task.id;
+  closeMenu();
+  if (wasOpen) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.dataset.for = task.id;
+  menu.setAttribute('role', 'menu');
+
+  const item = (cls, html, onClick, attrs = {}) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'menu__item' + (cls ? ' ' + cls : '');
+    b.innerHTML = html;
+    Object.entries(attrs).forEach(([k, v]) => b.setAttribute(k, v));
+    b.addEventListener('click', () => { closeMenu(); onClick(); });
+    menu.append(b);
+    return b;
+  };
+  const label = text => {
+    const d = document.createElement('div');
+    d.className = 'menu__label';
+    d.textContent = text;
+    menu.append(d);
+  };
+  const sep = () => menu.append(Object.assign(document.createElement('div'), { className: 'menu__sep' }));
+
+  /* ---- status ---- */
+  if (!task.done) {
+    label('סטטוס');
+    for (const key of ['doing', 'waiting']) {
+      const on = task.status === key;
+      item(
+        `menu__item--status menu__item--${key}`,
+        `<span class="status__dot" aria-hidden="true"></span><span>${STATUS[key].label}</span>` +
+        (on ? `<span class="menu__check">${ICON.check}</span>` : ''),
+        () => { setTaskStatus(task, key); render(); },
+        { role: 'menuitemradio', 'aria-checked': String(on) },
+      );
+    }
+    sep();
+
+    /* ---- reschedule ---- */
+    label('לא הספקתי — העברה ליום אחר');
+    const today = isoDate();
+    const moves = [];
+    const push = (text, date) => {
+      if (date !== task.task_date && !moves.some(m => m.date === date)) moves.push({ text, date });
+    };
+    if (task.task_date < today) push('העברה להיום', today);
+    push('העברה למחר', shiftDate(task.task_date, 1));
+
+    moves.forEach(m => item(
+      '', `<span class="menu__icon">${ICON.next}</span><span>${m.text}</span>`,
+      () => doMove(task, m.date), { role: 'menuitem' },
+    ));
+
+    const pick = document.createElement('label');
+    pick.className = 'menu__item menu__item--date';
+    pick.innerHTML = `<span class="menu__icon">${ICON.cal}</span><span>בחירת תאריך…</span>`;
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.value = task.task_date;
+    input.setAttribute('aria-label', 'העברת המשימה לתאריך');
+    input.addEventListener('change', () => {
+      if (!input.value || input.value === task.task_date) return closeMenu();
+      const date = input.value;
+      closeMenu();
+      doMove(task, date);
+    });
+    pick.append(input);
+    menu.append(pick);
+    sep();
+  }
+
+  /* ---- delete ---- */
+  item('menu__item--danger', `<span class="menu__icon">${ICON.trash}</span><span>מחיקת המשימה</span>`, () => {
+    deleteTask(task.id);
+    animateOut($(`.task[data-id="${task.id}"]`), render);
+    toast('המשימה נמחקה');
+  }, { role: 'menuitem' });
+
+  document.body.append(menu);
+  menuEl = menu;
+  place(menu, anchor);
+  menu.querySelector('.menu__item')?.focus();
+
+  document.addEventListener('pointerdown', onOutside, true);
+  window.addEventListener('resize', closeMenu);
+  window.addEventListener('scroll', closeMenu, true);
+}
+
+function place(menu, anchor) {
+  const a = anchor.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  const pad = 8;
+  const rtl = getComputedStyle(document.documentElement).direction === 'rtl';
+  // hang from the anchor's trailing edge, so the menu opens "inward"
+  let left = rtl ? a.right - m.width : a.left;
+  left = Math.max(pad, Math.min(left, innerWidth - m.width - pad));
+  let top = a.bottom + 6;
+  if (top + m.height > innerHeight - pad) top = Math.max(pad, a.top - m.height - 6);
+  menu.style.left = left + 'px';
+  menu.style.top  = top + 'px';
+}
+
+function doMove(task, date) {
+  const node = $(`.task[data-id="${task.id}"]`);
+  moveTask(task, date);
+  animateOut(node, () => { render(); pull().then(render); });
+  toast(`המשימה הועברה ל${relativeLabel(date)}`);
+}
+
 function commitTitle(task, input) {
   const v = input.value.trim();
   if (!v) { input.value = task.title; return; }
@@ -441,7 +603,7 @@ function toast(msg) {
 /* ============================================================
    CLOUD  (Supabase)
    ============================================================ */
-const COLS = 'id,task_date,title,done,completed_at,collapsed,position,subtasks,created_at,updated_at';
+const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -450,6 +612,7 @@ const toRow = t => ({
   title: t.title,
   done: t.done,
   completed_at: t.completed_at,
+  status: t.status ?? null,
   collapsed: t.collapsed,
   position: t.position,
   subtasks: t.subtasks,
@@ -649,6 +812,8 @@ function explain(err) {
   if (m.includes('already registered'))     return 'החשבון כבר קיים — אפשר להתחבר.';
   if (m.includes('relation') && m.includes('does not exist'))
                                             return 'טבלת tasks חסרה. הריצי את supabase/schema.sql ב-SQL Editor.';
+  if (m.includes('status') && m.includes('column'))
+                                            return 'חסרה עמודת status. הריצי שוב את supabase/schema.sql ב-SQL Editor.';
   if (m.includes('password'))               return 'הסיסמה חייבת להכיל לפחות 6 תווים.';
   return err?.message ?? 'משהו השתבש.';
 }
@@ -720,7 +885,9 @@ sheet.signOut.addEventListener('click', async () => {
 
 $$('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !sheet.root.hidden) closeSheet();
+  if (e.key !== 'Escape') return;
+  if (menuEl) closeMenu();
+  else if (!sheet.root.hidden) closeSheet();
 });
 
 /* ============================================================

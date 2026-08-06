@@ -16,12 +16,30 @@ create table if not exists public.tasks (
   title        text        not null check (char_length(title) between 1 and 300),
   done         boolean     not null default false,
   completed_at timestamptz,
+  status       text        check (status in ('doing', 'waiting')),
   collapsed    boolean     not null default true,
   position     double precision not null default 0,
   subtasks     jsonb       not null default '[]'::jsonb,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+
+-- ------------------------------------------------------------
+-- מיגרציות. הקובץ כולו בטוח להרצה חוזרת — אם הטבלה כבר קיימת
+-- מגרסה קודמת, השורות האלה משלימות את מה שחסר בלי לפגוע בנתונים.
+-- ------------------------------------------------------------
+alter table public.tasks add column if not exists status text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'tasks_status_check'
+  ) then
+    alter table public.tasks
+      add constraint tasks_status_check check (status in ('doing', 'waiting'));
+  end if;
+end
+$$;
 
 create index if not exists tasks_user_date_idx on public.tasks (user_id, task_date);
 create index if not exists tasks_user_open_idx on public.tasks (user_id, done, task_date);
