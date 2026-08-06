@@ -37,6 +37,9 @@
             <span class="sync-chip__dot" aria-hidden="true"></span>
             <span class="sync-chip__text">מקומי</span>
           </button>
+          <button id="walletBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="מנויים והוצאות">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 8.5A2.5 2.5 0 016 6h11.5A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19H6a2.5 2.5 0 01-2.5-2.5v-8z" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="14.5" r="1.3" fill="currentColor"/></svg>
+          </button>
           <button id="reportBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="דוח היום">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>
           </button>
@@ -120,6 +123,14 @@
           <span class="pill pill--count" id="doneCount">0</span>
         </button>
         <ul class="list list--done" id="doneList"></ul>
+      </section>
+
+      <section class="section" id="spendSection" aria-labelledby="spendHeading">
+        <h2 class="section__title" id="spendHeading">הוצאות היום</h2>
+        <ul class="spend" id="spendList"></ul>
+        <button class="spend__add" id="spendAdd" type="button">
+          <span aria-hidden="true">+</span><span>הוספת הוצאה ליום הזה</span>
+        </button>
       </section>
 
       <footer class="foot">
@@ -258,12 +269,114 @@
   </div>
 </div>
 
-<!-- ═══════════ DAILY REPORT ═══════════ -->
+<!-- ═══════════ SUBSCRIPTIONS & SPENDING ═══════════ -->
+<div class="sheet" id="walletSheet" hidden>
+  <div class="sheet__scrim" data-wallet-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="walletSheetTitle">
+    <div class="sheet__head">
+      <h2 id="walletSheetTitle">מנויים והוצאות</h2>
+      <button class="icon-btn" type="button" data-wallet-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body" id="walletBody"></div>
+  </div>
+</div>
+
+<!-- ═══════════ SUBSCRIPTION EDITOR ═══════════ -->
+<div class="sheet" id="subSheet" hidden>
+  <div class="sheet__scrim" data-sub-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="subSheetTitle">
+    <div class="sheet__head">
+      <h2 id="subSheetTitle">מנוי חדש</h2>
+      <button class="icon-btn" type="button" data-sub-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <div class="field">
+        <label for="subName">שם הפלטפורמה</label>
+        <input id="subName" type="text" maxlength="120" placeholder="למשל: Suno" autocomplete="off">
+      </div>
+      <div class="timepair">
+        <div class="field field--tight">
+          <label for="subAmount">עלות חודשית (₪)</label>
+          <input id="subAmount" type="number" dir="ltr" min="0" step="0.01" inputmode="decimal" placeholder="31">
+        </div>
+        <div class="field field--tight">
+          <label for="subDay">יום חיוב בחודש</label>
+          <input id="subDay" type="number" dir="ltr" min="1" max="28" step="1" inputmode="numeric" placeholder="1">
+        </div>
+      </div>
+      <div class="field">
+        <label for="subStarted">מאיזה חודש את משלמת</label>
+        <input id="subStarted" type="month" dir="ltr">
+        <p class="field__hint">מכאן ואילך ייווצר תיעוד חיוב לכל חודש.</p>
+      </div>
+      <label class="switch">
+        <input id="subActive" type="checkbox" checked>
+        <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+        <span>מנוי פעיל</span>
+      </label>
+      <p class="sheet__msg" id="subMsg" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="subSaveBtn" type="button">שמירה</button>
+        <button class="btn btn--quiet" id="subDeleteBtn" type="button">מחיקה</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ EXPENSE EDITOR ═══════════ -->
+<div class="sheet" id="expSheet" hidden>
+  <div class="sheet__scrim" data-exp-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="expSheetTitle">
+    <div class="sheet__head">
+      <h2 id="expSheetTitle">הוצאה חדשה</h2>
+      <button class="icon-btn" type="button" data-exp-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <div class="field">
+        <label for="expTitle">על מה</label>
+        <input id="expTitle" type="text" maxlength="200" placeholder="למשל: קרדיטים נוספים ב-Sora" autocomplete="off" list="expTitleList">
+        <datalist id="expTitleList"></datalist>
+      </div>
+      <div class="timepair">
+        <div class="field field--tight">
+          <label for="expAmount">סכום (₪)</label>
+          <input id="expAmount" type="number" dir="ltr" min="0" step="0.01" inputmode="decimal" placeholder="45">
+        </div>
+        <div class="field field--tight">
+          <label for="expDate">תאריך</label>
+          <input id="expDate" type="date" dir="ltr">
+        </div>
+      </div>
+      <div class="field">
+        <label for="expClient">לקוח (לא חובה)</label>
+        <input id="expClient" type="text" maxlength="60" placeholder="למי זה שייך" autocomplete="off" list="expClientList">
+        <datalist id="expClientList"></datalist>
+      </div>
+      <p class="sheet__msg" id="expMsg" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="expSaveBtn" type="button">שמירה</button>
+        <button class="btn btn--quiet" id="expDeleteBtn" type="button">מחיקה</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ REPORT ═══════════ -->
 <div class="sheet" id="reportSheet" hidden>
   <div class="sheet__scrim" data-report-close></div>
   <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="reportSheetTitle">
     <div class="sheet__head">
-      <h2 id="reportSheetTitle">דוח היום</h2>
+      <h2 id="reportSheetTitle">דוח</h2>
+      <div class="segmented" role="tablist" aria-label="תקופת הדוח">
+        <button class="segmented__btn is-on" id="repDay" type="button" role="tab" aria-selected="true">יומי</button>
+        <button class="segmented__btn" id="repMonth" type="button" role="tab" aria-selected="false">חודשי</button>
+      </div>
       <button class="icon-btn" type="button" data-report-close aria-label="סגירה">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
