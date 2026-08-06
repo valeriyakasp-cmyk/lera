@@ -87,8 +87,8 @@
 1. בריפו: **Settings** → **Pages**.
 2. תחת *Build and deployment* → *Source*: לבחור **GitHub Actions**.
 
-הוורקפלואו שנמצא ב־`.github/workflows/pages.yml` יעלה את האתר בכל דחיפה ל־`main`,
-והכתובת תהיה `https://<שם-המשתמש>.github.io/lera/`.
+הוורקפלואו שנמצא ב־`.github/workflows/pages.yml` יעלה את האתר בכל דחיפה
+לענף הראשי של הריפו, והכתובת תהיה `https://<שם-המשתמש>.github.io/lera/`.
 
 לחלופין אפשר פשוט לפתוח את `index.html` מקומית בדפדפן — הכול עובד גם ככה.
 
