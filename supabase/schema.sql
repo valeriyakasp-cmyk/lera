@@ -36,7 +36,11 @@ alter table public.tasks add column if not exists planned_at  text;   -- 'HH:MM'
 alter table public.tasks add column if not exists started_at  timestamptz;
 alter table public.tasks add column if not exists finished_at timestamptz;
 
-create index if not exists tasks_user_client_idx on public.tasks (user_id, client);
+-- היום שממנו המשימה נדחתה — כדי שהיא תמשיך להופיע גם ביום המקורי
+alter table public.tasks add column if not exists moved_from date;
+
+create index if not exists tasks_user_client_idx     on public.tasks (user_id, client);
+create index if not exists tasks_user_movedfrom_idx  on public.tasks (user_id, moved_from);
 
 do $$
 begin
