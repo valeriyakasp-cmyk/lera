@@ -110,7 +110,7 @@ function clientHue(name) {
    ============================================================ */
 /** Fill in fields added after a task was first saved, so older rows behave. */
 const normalize = t => ({
-  client: null, planned_at: null, started_at: null, finished_at: null,
+  client: null, planned_at: null, started_at: null, finished_at: null, moved_from: null,
   ...t,
   subtasks: (t.subtasks ?? []).map(s => ({ status: null, ...s })),
 });
@@ -205,6 +205,7 @@ function addTask(title) {
     planned_at: null,    // 'HH:MM' — when it is meant to happen
     started_at: null,    // ISO — filled from the completion sheet
     finished_at: null,   // ISO — stamped the moment it is checked off
+    moved_from: null,    // the day it was pushed forward from
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -393,8 +394,14 @@ function applyOrder(ids) {
   });
 }
 
-/** Reschedule to another day — appended to the end of the target day. */
+/**
+ * Reschedule to another day — appended to the end of the target day.
+ * Pushing a task forward leaves a trace on the day it came from, so that
+ * day still shows what was planned for it and did not get done.
+ */
 function moveTask(task, date) {
+  const from = task.task_date;
+  task.moved_from = date > from ? (task.moved_from ?? from) : null;
   task.task_date = date;
   task.position = Date.now();
   touch(task);
@@ -487,6 +494,9 @@ const el = {
   syncChip:    $('#syncChip'),
   footStatus:  $('#footStatus'),
   toast:       $('#toast'),
+  movedSection:$('#movedSection'),
+  movedList:   $('#movedList'),
+  movedTitle:  $('#movedHeading'),
   spendList:   $('#spendList'),
   spendAdd:    $('#spendAdd'),
   spendTitle:  $('#spendHeading'),
@@ -561,7 +571,79 @@ function render() {
     ? '<strong>משימה אחת</strong> נשארה פתוחה מימים קודמים'
     : `<strong>${carry.length} משימות</strong> נשארו פתוחות מימים קודמים`;
 
+  /* --- pushed forward off this day: still part of the day's story --- */
+  const moved = pushedFrom(state.date);
+  el.movedSection.hidden = moved.length === 0;
+  el.movedTitle.textContent = moved.length
+    ? `הועברו ליום אחר · ${moved.length}`
+    : 'הועברו ליום אחר';
+  el.movedList.replaceChildren(...moved.map(movedNode));
+
   renderSpend();
+}
+
+/** Open tasks that were planned for `date` but pushed to a later day. */
+const pushedFrom = date => state.tasks
+  .filter(t => t.moved_from === date && t.task_date > date && !t.done)
+  .sort((a, b) => (a.task_date ?? '').localeCompare(b.task_date ?? ''));
+
+/** A read-only echo of a task that left this day, with a way to pull it back. */
+function movedNode(task) {
+  const li = document.createElement('li');
+  li.className = 'task task--moved';
+  li.dataset.id = task.id;
+
+  const row = document.createElement('div');
+  row.className = 'task__row';
+
+  const icon = document.createElement('span');
+  icon.className = 'moved__icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = ICON.next;
+
+  const main = document.createElement('div');
+  main.className = 'task__main';
+
+  const title = document.createElement('span');
+  title.className = 'task__title task__title--static';
+  title.textContent = task.title;
+  main.append(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'task__meta';
+
+  const when = document.createElement('span');
+  when.className = 'chip chip--moved';
+  when.textContent = 'הועברה ל' + relativeLabel(task.task_date);
+  meta.append(when);
+
+  const total = task.subtasks.length;
+  if (total) {
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.textContent = `${task.subtasks.filter(s => s.done).length}/${total}`;
+    c.title = 'תת־משימות שהושלמו';
+    meta.append(c);
+  }
+  if (task.client) {
+    const c = document.createElement('span');
+    c.className = 'chip chip--client';
+    c.style.setProperty('--hue', clientHue(task.client));
+    c.textContent = task.client;
+    meta.append(c);
+  }
+  main.append(meta);
+
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'moved__back';
+  back.textContent = 'החזרה';
+  back.title = `החזרת המשימה ל${relativeLabel(state.date)}`;
+  back.addEventListener('click', () => doMove(task, state.date));
+
+  row.append(icon, main, back);
+  li.append(row);
+  return li;
 }
 
 /** The day's spending, right under the task lists. */
@@ -1724,6 +1806,7 @@ function drawDayReport() {
   const maxTotal = Math.max(1, ...d.clients.map(c => c.total));
   const spend = expensesOn(state.date);
   const spendTotal = sum(spend, e => e.amount);
+  const pushed = pushedFrom(state.date);
 
   const clientRows = d.clients
     .map(c => barRow(c.name,
@@ -1747,6 +1830,12 @@ function drawDayReport() {
       ${t.client ? `<span class="chip chip--client" style="--hue:${clientHue(t.client)}">${esc(t.client)}</span>` : ''}
     </li>`).join('');
 
+  const pushedRows = pushed.map(t => `
+    <li class="rep__row rep__row--open">
+      <span class="rep__task">${esc(t.title)}</span>
+      <span class="rep__time">${esc(relativeLabel(t.task_date))}</span>
+    </li>`).join('');
+
   const spendRows = spend.map(e => `
     <li class="rep__row">
       <span class="rep__task">${esc(e.title)}</span>
@@ -1764,6 +1853,7 @@ function drawDayReport() {
         <div class="rep__kpi"><b>${d.open.length}</b><span>נותרו</span></div>
         <div class="rep__kpi"><b>${d.totalMins ? esc(humanDuration(d.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
         <div class="rep__kpi"><b dir="ltr">${spendTotal ? esc(money(spendTotal)) : '—'}</b><span>הוצאות</span></div>
+        ${pushed.length ? `<div class="rep__kpi"><b>${pushed.length}</b><span>הועברו הלאה</span></div>` : ''}
       </div>
     </div>
 
@@ -1771,13 +1861,14 @@ function drawDayReport() {
     ${timeline   ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
     ${spendRows  ? `<h3 class="rep__h">הוצאות היום</h3><ul class="rep__list">${spendRows}</ul>` : ''}
     ${leftovers  ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
+    ${pushedRows ? `<h3 class="rep__h">הועברו ליום אחר</h3><ul class="rep__list">${pushedRows}</ul>` : ''}
     ${d.rows.length || spend.length ? '' : '<p class="rep__empty">אין משימות או הוצאות ליום הזה.</p>'}
 
     <div class="btn-row rep__actions">
       <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
     </div>`;
 
-  $('#repCopy')?.addEventListener('click', () => copyText(dayReportText(d, spend, spendTotal)));
+  $('#repCopy')?.addEventListener('click', () => copyText(dayReportText(d, spend, spendTotal, pushed)));
 }
 
 /* ---------------- monthly ---------------- */
@@ -1856,7 +1947,7 @@ async function copyText(text) {
   catch { toast('ההעתקה נכשלה'); }
 }
 
-function dayReportText(d, spend, spendTotal) {
+function dayReportText(d, spend, spendTotal, pushed = []) {
   const lines = [
     `דוח משימות · ${heDayName(state.date)} ${heDate(state.date)}`,
     `הושלמו ${d.done.length} מתוך ${d.rows.length} (${d.pct}%)`,
@@ -1878,6 +1969,10 @@ function dayReportText(d, spend, spendTotal) {
   if (d.open.length) {
     lines.push('', 'נשאר פתוח:');
     d.open.forEach(t => lines.push(`· ${t.title}`));
+  }
+  if (pushed.length) {
+    lines.push('', 'הועברו ליום אחר:');
+    pushed.forEach(t => lines.push(`· ${t.title} → ${relativeLabel(t.task_date)}`));
   }
   return lines.join('\n');
 }
@@ -1917,7 +2012,7 @@ $('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMon
    CLOUD  (Supabase)
    ============================================================ */
 const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
-             'client,planned_at,started_at,finished_at,created_at,updated_at';
+             'client,planned_at,started_at,finished_at,moved_from,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -1934,6 +2029,7 @@ const toRow = t => ({
   planned_at: t.planned_at ?? null,
   started_at: t.started_at ?? null,
   finished_at: t.finished_at ?? null,
+  moved_from: t.moved_from ?? null,
   created_at: t.created_at,
   updated_at: t.updated_at,
 });
@@ -2052,13 +2148,21 @@ async function pull() {
   try {
     const dates = [state.date, shiftDate(state.date, -1), shiftDate(state.date, 1)];
 
-    const { data, error } = await state.sb
-      .from('tasks').select(COLS).in('task_date', dates);
-    if (error) throw error;
+    // the days in view, plus anything that was pushed forward off this day
+    const [mainRes, pushedRes] = await Promise.all([
+      state.sb.from('tasks').select(COLS).in('task_date', dates),
+      state.sb.from('tasks').select(COLS).eq('moved_from', state.date),
+    ]);
+    if (mainRes.error)   throw mainRes.error;
+    if (pushedRes.error) throw pushedRes.error;
 
     const pending = new Set(state.queue.map(o => o.id));
-    const incoming = (data ?? []).filter(r => !pending.has(r.id));
-    const incomingIds = new Set(incoming.map(r => r.id));
+    const byId = new Map();
+    for (const r of [...(mainRes.data ?? []), ...(pushedRes.data ?? [])]) {
+      if (!pending.has(r.id)) byId.set(r.id, r);
+    }
+    const incoming = [...byId.values()];
+    const incomingIds = new Set(byId.keys());
 
     state.tasks = [
       ...state.tasks.filter(t =>
@@ -2114,7 +2218,7 @@ async function carryOver() {
     setStatus('syncing');
     const { error } = await state.sb
       .from('tasks')
-      .update({ task_date: state.date, updated_at: new Date().toISOString() })
+      .update({ task_date: state.date, moved_from: null, updated_at: new Date().toISOString() })
       .in('id', ids);
     if (error) { console.error(error); setStatus('error'); toast('ההעברה נכשלה'); return; }
   }
@@ -2122,7 +2226,7 @@ async function carryOver() {
   let p = nextPosition(state.date);
   ids.forEach(id => {
     const t = state.tasks.find(x => x.id === id);
-    if (t) { t.task_date = state.date; t.position = p++; t.updated_at = new Date().toISOString(); }
+    if (t) { t.task_date = state.date; t.moved_from = null; t.position = p++; t.updated_at = new Date().toISOString(); }
   });
   state.earlier = [];
   persist();

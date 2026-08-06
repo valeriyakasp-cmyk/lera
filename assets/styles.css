@@ -968,6 +968,39 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 }
 .spend__add:hover { background: var(--surface); color: var(--ink); border-color: var(--ink-3); }
 
+/* ============================================================
+   PUSHED FORWARD — the echo a task leaves on the day it left
+   ============================================================ */
+.task--moved {
+  background: var(--card);
+  box-shadow: none;
+  border: 1px dashed var(--ink-4);
+}
+.task--moved:hover { box-shadow: var(--sh-1); }
+.task--moved .task__row { min-height: 48px; }
+.task__title--static {
+  display: block;
+  font-size: 15px; font-weight: 600; line-height: 1.4;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.moved__icon {
+  width: 24px; flex: none;
+  display: grid; place-items: center;
+  color: var(--ink-3);
+}
+.moved__icon svg { width: 17px; height: 17px; }
+.chip--moved { background: #FDF0DC; color: #7A4A05; }
+.moved__back {
+  flex: none; height: 30px; padding-inline: var(--s3);
+  border-radius: 999px;
+  background: var(--surface); color: var(--ink);
+  font-size: 12.5px; font-weight: 600;
+  box-shadow: var(--sh-1);
+  transition: background var(--dur) var(--ease);
+}
+.moved__back:hover { background: var(--blue-100); color: #17558F; }
+
 /* ---- month navigator inside sheets ---- */
 .monthnav {
   display: flex; align-items: center; justify-content: center; gap: var(--s2);
