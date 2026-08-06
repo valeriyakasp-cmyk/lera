@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#5FA3DE">
+<meta name="description" content="ניהול משימות יומי — פשוט, מינימליסטי, מסונכרן.">
+<title>המשימות שלי</title>
+
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235FA3DE'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11.5' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./assets/styles.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">דילוג לתוכן</a>
+
+<div class="page">
+  <div class="shell">
+
+    <!-- ═══════════ HERO ═══════════ -->
+    <header class="hero">
+      <div class="hero__nav">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="brand__name">המשימות שלי</span>
+        </div>
+
+        <div class="hero__nav-actions">
+          <button id="syncChip" class="sync-chip" type="button" data-state="local">
+            <span class="sync-chip__dot" aria-hidden="true"></span>
+            <span class="sync-chip__text">מקומי</span>
+          </button>
+          <button id="settingsBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="הגדרות וסנכרון">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z" stroke="currentColor" stroke-width="1.7"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 110-4h.09A1.65 1.65 0 003.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 008 3.68 1.65 1.65 0 009 2.17V2a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H22a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="hero__body">
+        <p class="hero__eyebrow" id="heroEyebrow">יום ראשון</p>
+        <h1 class="hero__title" id="heroTitle">בוקר טוב</h1>
+
+        <div class="datenav" role="group" aria-label="ניווט בין תאריכים">
+          <button id="prevDay" class="datenav__arrow" type="button" aria-label="היום הקודם">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+
+          <label class="datenav__field">
+            <span id="dateLabel" class="datenav__label">היום</span>
+            <input type="date" id="datePicker" aria-label="בחירת תאריך">
+          </label>
+
+          <button id="nextDay" class="datenav__arrow" type="button" aria-label="היום הבא">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+
+          <button id="todayBtn" class="datenav__today" type="button" hidden>היום</button>
+        </div>
+      </div>
+
+      <div class="stats" id="stats">
+        <div class="stat">
+          <span class="stat__label">פתוחות</span>
+          <span class="stat__value" id="statOpen">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat__label">הושלמו</span>
+          <span class="stat__value"><span id="statDone">0</span><small id="statTotal">/0</small></span>
+        </div>
+        <div class="stat">
+          <span class="stat__label">התקדמות</span>
+          <span class="stat__value"><span id="statPct">0</span><small>%</small></span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══════════ CONTENT ═══════════ -->
+    <main class="content" id="main">
+
+      <form class="composer" id="addForm" autocomplete="off">
+        <span class="composer__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </span>
+        <input id="addInput" type="text" placeholder="הוספת משימה חדשה…" aria-label="משימה חדשה" maxlength="300">
+        <button type="submit" class="composer__submit" id="addSubmit">הוספה</button>
+      </form>
+
+      <div class="carryover" id="carryover" hidden>
+        <div class="carryover__text" id="carryoverText"></div>
+        <button type="button" class="btn btn--soft" id="carryoverBtn">העברה להיום</button>
+      </div>
+
+      <section class="section" aria-labelledby="activeHeading">
+        <h2 class="section__title" id="activeHeading">משימות היום</h2>
+        <ul class="list" id="activeList"></ul>
+
+        <div class="empty" id="emptyState" hidden>
+          <div class="empty__art" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none"><rect x="7" y="9" width="34" height="30" rx="7" stroke="currentColor" stroke-width="2"/><path d="M15 20h18M15 27h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+          <p class="empty__title">אין משימות ליום הזה</p>
+          <p class="empty__sub">הוסיפי משימה ראשונה כדי להתחיל</p>
+        </div>
+      </section>
+
+      <section class="section section--done" id="doneSection" hidden>
+        <button class="section__toggle" id="doneToggle" type="button" aria-expanded="true" aria-controls="doneList">
+          <svg class="section__chev" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>הושלמו</span>
+          <span class="pill pill--count" id="doneCount">0</span>
+        </button>
+        <ul class="list list--done" id="doneList"></ul>
+      </section>
+
+      <footer class="foot">
+        <span id="footStatus">הנתונים נשמרים במכשיר הזה</span>
+      </footer>
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════ SETTINGS SHEET ═══════════ -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet__scrim" data-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet__head">
+      <h2 id="sheetTitle">סנכרון בענן</h2>
+      <button class="icon-btn" type="button" data-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="sheet__body">
+      <p class="sheet__note">
+        הנתונים נשמרים בפרויקט <strong>Supabase</strong> פרטי שלך. רק המשתמש שלך רואה אותם.
+        <a href="./README.md" target="_blank" rel="noopener">מדריך הקמה →</a>
+      </p>
+
+      <!-- step 1: project -->
+      <div class="field">
+        <label for="cfgUrl">Project URL</label>
+        <input id="cfgUrl" type="url" dir="ltr" placeholder="https://xxxx.supabase.co" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="cfgKey">Anon public key</label>
+        <input id="cfgKey" type="text" dir="ltr" placeholder="eyJhbGciOi…" spellcheck="false">
+      </div>
+      <button class="btn btn--primary btn--block" id="connectBtn" type="button">חיבור לפרויקט</button>
+
+      <!-- step 2: auth -->
+      <div class="divider" id="authDivider" hidden><span>התחברות</span></div>
+
+      <div id="authBox" hidden>
+        <div class="field">
+          <label for="cfgEmail">אימייל</label>
+          <input id="cfgEmail" type="email" dir="ltr" autocomplete="username" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="cfgPass">סיסמה</label>
+          <input id="cfgPass" type="password" dir="ltr" autocomplete="current-password">
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--primary" id="signInBtn" type="button">כניסה</button>
+          <button class="btn btn--soft" id="signUpBtn" type="button">יצירת חשבון</button>
+        </div>
+      </div>
+
+      <div id="accountBox" hidden>
+        <div class="account">
+          <div class="account__avatar" id="accountInitial">?</div>
+          <div class="account__meta">
+            <span class="account__email" id="accountEmail" dir="ltr"></span>
+            <span class="account__state" id="accountState">מסונכרן</span>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--soft" id="syncNowBtn" type="button">סנכרון עכשיו</button>
+          <button class="btn btn--quiet" id="signOutBtn" type="button">התנתקות</button>
+        </div>
+      </div>
+
+      <p class="sheet__msg" id="sheetMsg" hidden></p>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="module" src="./assets/app.js"></script>
+</body>
+</html>
