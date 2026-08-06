@@ -5,10 +5,11 @@
    ============================================================ */
 
 const LS = {
-  tasks: 'tasks.v1',
-  queue: 'queue.v1',
-  cfg:   'cfg.v1',
-  ui:    'ui.v1',
+  tasks:   'tasks.v1',
+  queue:   'queue.v1',
+  cfg:     'cfg.v1',
+  ui:      'ui.v1',
+  clients: 'clients.v1',
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -48,21 +49,73 @@ function relativeLabel(iso) {
   return heDate(iso);
 }
 
+/** Whose app this is — used by the greeting. */
+const OWNER = 'לרה';
+
 function greeting() {
   const h = new Date().getHours();
-  if (h < 5)  return 'לילה טוב';
-  if (h < 12) return 'בוקר טוב';
-  if (h < 17) return 'צהריים טובים';
-  if (h < 21) return 'ערב טוב';
-  return 'לילה טוב';
+  const part =
+    h < 5  ? 'לילה טוב'    :
+    h < 12 ? 'בוקר טוב'    :
+    h < 17 ? 'צהריים טובים' :
+    h < 21 ? 'ערב טוב'     : 'לילה טוב';
+  return `${part} ${OWNER}`;
+}
+
+/* ---------- clock helpers ---------- */
+
+/** 'HH:MM' in local time, from a Date or an ISO string. */
+const hhmm = d => {
+  const t = d instanceof Date ? d : new Date(d);
+  return String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+};
+
+/** 'HH:MM' on a given calendar day → ISO timestamp. */
+function isoAt(dateIso, time) {
+  if (!time) return null;
+  const [h, m] = time.split(':').map(Number);
+  const d = new Date(dateIso + 'T00:00:00');
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+}
+
+/** Minutes between two ISO timestamps, or null when either is missing. */
+function minutesBetween(a, b) {
+  if (!a || !b) return null;
+  const diff = Math.round((new Date(b) - new Date(a)) / 60000);
+  return diff >= 0 ? diff : null;
+}
+
+/** 95 → "שעה ו־35 דק׳" */
+function humanDuration(mins) {
+  if (mins == null) return '';
+  if (mins < 60) return `${mins} דק׳`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const hp = h === 1 ? 'שעה' : h === 2 ? 'שעתיים' : `${h} שעות`;
+  return m ? `${hp} ו־${m} דק׳` : hp;
+}
+
+/** Stable pastel per client name, so a client always looks the same. */
+function clientHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return h;
 }
 
 /* ============================================================
    STATE
    ============================================================ */
+/** Fill in fields added after a task was first saved, so older rows behave. */
+const normalize = t => ({
+  client: null, planned_at: null, started_at: null, finished_at: null,
+  ...t,
+  subtasks: (t.subtasks ?? []).map(s => ({ status: null, ...s })),
+});
+
 const state = {
   date:    isoDate(),
-  tasks:   read(LS.tasks, []),
+  tasks:   read(LS.tasks, []).map(normalize),
   queue:   read(LS.queue, []),
   cfg:     read(LS.cfg, { url: '', key: '' }),
   ui:      read(LS.ui, { doneOpen: true }),
@@ -110,6 +163,10 @@ function addTask(title) {
     collapsed: true,
     position: nextPosition(state.date),
     subtasks: [],
+    client: null,        // free-text client tag
+    planned_at: null,    // 'HH:MM' — when it is meant to happen
+    started_at: null,    // ISO — filled from the completion sheet
+    finished_at: null,   // ISO — stamped the moment it is checked off
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -126,9 +183,12 @@ function deleteTask(id) {
 
 /** Toggling the parent cascades to every subtask — predictable both ways. */
 function setTaskDone(task, done) {
+  const now = new Date().toISOString();
   task.done = done;
-  task.completed_at = done ? new Date().toISOString() : null;
-  task.subtasks = task.subtasks.map(s => ({ ...s, done }));
+  task.completed_at = done ? now : null;
+  task.finished_at  = done ? now : null;
+  if (!done) task.started_at = null;
+  task.subtasks = task.subtasks.map(s => ({ ...s, done, status: done ? null : s.status ?? null }));
   if (done) { task.collapsed = true; task.status = null; }
   touch(task);
 }
@@ -137,6 +197,45 @@ function setTaskDone(task, done) {
 function setTaskStatus(task, status) {
   task.status = task.status === status ? null : status;
   touch(task);
+}
+
+/** A subtask's status bubbles up: the parent shows whatever the subtask says. */
+function setSubStatus(task, subId, status) {
+  const sub = task.subtasks.find(s => s.id === subId);
+  if (!sub) return;
+  sub.status = sub.status === status ? null : status;
+  // the parent mirrors the most recent explicit signal from its subtasks
+  task.status = sub.status ?? (task.subtasks.find(s => s.status)?.status ?? null);
+  touch(task);
+}
+
+/** Free-text client tag. Empty string clears it. */
+function setTaskClient(task, client) {
+  const v = (client ?? '').trim();
+  task.client = v || null;
+  if (v) rememberClient(v);
+  touch(task);
+}
+
+/** 'HH:MM' or null — the hour the task is meant to happen. */
+function setTaskPlanned(task, time) {
+  task.planned_at = time || null;
+  touch(task);
+}
+
+/** Persist the finished/started pair captured by the completion sheet. */
+function setTaskTimes(task, startedIso, finishedIso) {
+  task.started_at  = startedIso  ?? null;
+  task.finished_at = finishedIso ?? null;
+  touch(task);
+}
+
+/** Rewrite `position` from the current visual order of the active list. */
+function applyOrder(ids) {
+  ids.forEach((id, i) => {
+    const t = state.tasks.find(x => x.id === id);
+    if (t && t.position !== i) { t.position = i; touch(t); }
+  });
 }
 
 /** Reschedule to another day — appended to the end of the target day. */
@@ -152,21 +251,26 @@ function setSubDone(task, subId, done) {
   if (!sub) return;
   sub.done = done;
 
+  if (done) sub.status = null;
+
   const all = task.subtasks.length > 0 && task.subtasks.every(s => s.done);
   if (all && !task.done) {
     task.done = true;
     task.completed_at = new Date().toISOString();
+    task.finished_at  = task.completed_at;
     task.collapsed = true;
     task.status = null;
   } else if (!all && task.done) {
     task.done = false;
     task.completed_at = null;
+    task.finished_at  = null;
+    task.started_at   = null;
   }
   touch(task);
 }
 
 function addSub(task, title) {
-  task.subtasks.push({ id: uid(), title: title.trim(), done: false });
+  task.subtasks.push({ id: uid(), title: title.trim(), done: false, status: null });
   // A new open subtask reopens a completed parent.
   if (task.done) { task.done = false; task.completed_at = null; }
   touch(task);
@@ -177,9 +281,29 @@ function deleteSub(task, subId) {
   if (task.subtasks.length && task.subtasks.every(s => s.done) && !task.done) {
     task.done = true;
     task.completed_at = new Date().toISOString();
+    task.finished_at  = task.completed_at;
     task.status = null;
   }
   touch(task);
+}
+
+/* ============================================================
+   CLIENTS — the list builds itself from what you type
+   ============================================================ */
+function rememberClient(name) {
+  const v = name.trim();
+  if (!v) return;
+  const list = read(LS.clients, []).filter(c => c.toLowerCase() !== v.toLowerCase());
+  list.unshift(v);
+  write(LS.clients, list.slice(0, 40));
+}
+
+/** Known clients: recently typed first, then anything seen on a task. */
+function knownClients() {
+  const seen = new Map();
+  read(LS.clients, []).forEach(c => seen.set(c.toLowerCase(), c));
+  state.tasks.forEach(t => { if (t.client) seen.set(t.client.toLowerCase(), t.client); });
+  return [...seen.values()];
 }
 
 /* ============================================================
@@ -219,6 +343,10 @@ const ICON = {
   more:  '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></svg>',
   cal:   '<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5" width="17" height="16" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   next:  '<svg viewBox="0 0 24 24" fill="none"><path d="M13 6l-6 6 6 6M17 6v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  grip:  '<svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="6" r="1.5" fill="currentColor"/><circle cx="15" cy="6" r="1.5" fill="currentColor"/><circle cx="9" cy="12" r="1.5" fill="currentColor"/><circle cx="15" cy="12" r="1.5" fill="currentColor"/><circle cx="9" cy="18" r="1.5" fill="currentColor"/><circle cx="15" cy="18" r="1.5" fill="currentColor"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.6V12l3 1.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  tag:   '<svg viewBox="0 0 24 24" fill="none"><path d="M3.5 11.2V4.6a1 1 0 011-1h6.6a1 1 0 01.71.3l8.1 8.1a1 1 0 010 1.42l-6.6 6.6a1 1 0 01-1.42 0l-8.1-8.1a1 1 0 01-.29-.72z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.9" cy="7.9" r="1.4" fill="currentColor"/></svg>',
+  pencil:'<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4L20 8a2.1 2.1 0 00-3-3L5 17v3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14.5 6.5L17.5 9.5" stroke="currentColor" stroke-width="1.7"/></svg>',
 };
 
 /** Status vocabulary. `null` is the implicit "open" state and has no pill. */
@@ -297,8 +425,10 @@ function taskNode(task) {
   check.setAttribute('aria-label', task.done ? 'סימון כלא הושלמה' : 'סימון כהושלמה');
   check.innerHTML = ICON.check;
   check.addEventListener('click', () => {
-    setTaskDone(task, !task.done);
-    animateOut(li, render);
+    const turningOn = !task.done;
+    setTaskDone(task, turningOn);
+    if (turningOn) completeTask(task, li);
+    else animateOut(li, render);
   });
 
   const main = document.createElement('div');
@@ -316,13 +446,48 @@ function taskNode(task) {
   });
   main.append(title);
 
+  /* ---- meta strip: status · planned hour · client · tracked time ---- */
+  const meta = document.createElement('div');
+  meta.className = 'task__meta';
+
   if (task.status && !task.done) {
     const pill = document.createElement('span');
     pill.className = `status status--${task.status}`;
     pill.innerHTML = '<span class="status__dot" aria-hidden="true"></span>';
     pill.append(STATUS[task.status].label);
-    main.append(pill);
+    meta.append(pill);
   }
+
+  if (task.planned_at && !task.done) {
+    const t = document.createElement('span');
+    t.className = 'chip chip--time';
+    t.innerHTML = `<span class="chip__icon" aria-hidden="true">${ICON.clock}</span><span dir="ltr">${task.planned_at}</span>`;
+    t.title = 'שעת ביצוע מתוכננת';
+    meta.append(t);
+  }
+
+  const mins = minutesBetween(task.started_at, task.finished_at);
+  if (task.done && mins != null) {
+    const d = document.createElement('span');
+    d.className = 'chip chip--dur';
+    d.innerHTML = `<span class="chip__icon" aria-hidden="true">${ICON.clock}</span>`;
+    d.append(humanDuration(mins));
+    d.title = `${hhmm(task.started_at)}–${hhmm(task.finished_at)}`;
+    meta.append(d);
+  }
+
+  if (task.client) {
+    const c = document.createElement('button');
+    c.type = 'button';
+    c.className = 'chip chip--client';
+    c.style.setProperty('--hue', clientHue(task.client));
+    c.textContent = task.client;
+    c.title = 'שינוי הלקוח';
+    c.addEventListener('click', e => { e.stopPropagation(); openClientSheet(task); });
+    meta.append(c);
+  }
+
+  if (meta.childElementCount) main.append(meta);
 
   const actions = document.createElement('div');
   actions.className = 'task__actions';
@@ -357,6 +522,17 @@ function taskNode(task) {
   more.addEventListener('click', e => { e.stopPropagation(); openMenu(task, more); });
 
   actions.append(chev, more);
+
+  if (!task.done) {
+    const grip = document.createElement('button');
+    grip.type = 'button';
+    grip.className = 'task__grip';
+    grip.setAttribute('aria-label', 'גרירה לשינוי הסדר');
+    grip.innerHTML = ICON.grip;
+    grip.addEventListener('pointerdown', e => startDrag(e, li));
+    row.append(grip);
+  }
+
   row.append(check, main, actions);
   li.append(row);
 
@@ -407,12 +583,8 @@ function subNode(task, sub) {
   check.addEventListener('click', () => {
     const wasDone = task.done;
     setSubDone(task, sub.id, !sub.done);
-    if (!wasDone && task.done) {
-      animateOut($(`.task[data-id="${task.id}"]`), render);
-      toast('המשימה הושלמה 🎉');
-    } else {
-      render();
-    }
+    if (!wasDone && task.done) completeTask(task, $(`.task[data-id="${task.id}"]`));
+    else render();
   });
 
   const title = document.createElement('input');
@@ -445,8 +617,62 @@ function subNode(task, sub) {
     else render();
   });
 
-  div.append(check, title, del);
+  /* status dot — marking a subtask also marks the parent */
+  const st = document.createElement('button');
+  st.type = 'button';
+  st.className = 'sub__status' + (sub.status ? ` is-${sub.status}` : '');
+  st.setAttribute('aria-label', sub.status ? `סטטוס: ${STATUS[sub.status].label}` : 'קביעת סטטוס');
+  st.setAttribute('aria-haspopup', 'menu');
+  st.innerHTML = '<span class="status__dot" aria-hidden="true"></span>';
+  if (sub.status) st.title = STATUS[sub.status].label;
+  st.addEventListener('click', e => { e.stopPropagation(); openSubMenu(task, sub, st); });
+
+  div.append(check, title, st, del);
   return div;
+}
+
+/** Tiny status picker for a subtask. Whatever you pick, the parent shows too. */
+function openSubMenu(task, sub, anchor) {
+  const wasOpen = menuEl?.dataset.for === sub.id;
+  closeMenu();
+  if (wasOpen) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'menu menu--mini';
+  menu.dataset.for = sub.id;
+  menu.setAttribute('role', 'menu');
+
+  const label = document.createElement('div');
+  label.className = 'menu__label';
+  label.textContent = 'סטטוס תת־המשימה';
+  menu.append(label);
+
+  for (const key of ['doing', 'waiting']) {
+    const on = sub.status === key;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `menu__item menu__item--status menu__item--${key}`;
+    b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', String(on));
+    b.innerHTML =
+      `<span class="status__dot" aria-hidden="true"></span><span>${STATUS[key].label}</span>` +
+      (on ? `<span class="menu__check">${ICON.check}</span>` : '');
+    b.addEventListener('click', () => {
+      closeMenu();
+      setSubStatus(task, sub.id, key);
+      render();
+    });
+    menu.append(b);
+  }
+
+  document.body.append(menu);
+  menuEl = menu;
+  place(menu, anchor);
+  menu.querySelector('.menu__item')?.focus();
+
+  document.addEventListener('pointerdown', onOutside, true);
+  window.addEventListener('resize', closeMenu);
+  window.addEventListener('scroll', closeMenu, true);
 }
 
 /* ============================================================
@@ -491,6 +717,37 @@ function openMenu(task, anchor) {
     menu.append(d);
   };
   const sep = () => menu.append(Object.assign(document.createElement('div'), { className: 'menu__sep' }));
+
+  /* ---- edit ---- */
+  item('', `<span class="menu__icon">${ICON.pencil}</span><span>עריכת שם המשימה</span>`, () => {
+    const input = $(`.task[data-id="${task.id}"] .task__title`);
+    input?.focus();
+    input?.select();
+  }, { role: 'menuitem' });
+
+  item('', `<span class="menu__icon">${ICON.tag}</span><span>${task.client ? `לקוח · ${task.client}` : 'שיוך ללקוח…'}</span>`,
+    () => openClientSheet(task), { role: 'menuitem' });
+
+  if (!task.done) {
+    /* planned hour — a real, visible time field so it works on every platform */
+    const timeRow = document.createElement('div');
+    timeRow.className = 'menu__item menu__item--time';
+    timeRow.innerHTML = `<span class="menu__icon">${ICON.clock}</span><span>שעת ביצוע</span>`;
+    const ti = document.createElement('input');
+    ti.type = 'time';
+    ti.dir = 'ltr';
+    ti.value = task.planned_at ?? '';
+    ti.setAttribute('aria-label', 'שעת ביצוע מתוכננת');
+    ti.addEventListener('change', () => {
+      setTaskPlanned(task, ti.value);
+      render();
+      toast(ti.value ? `נקבעה שעה ${ti.value}` : 'השעה הוסרה');
+      closeMenu();
+    });
+    timeRow.append(ti);
+    menu.append(timeRow);
+  }
+  sep();
 
   /* ---- status ---- */
   if (!task.done) {
@@ -566,7 +823,8 @@ function place(menu, anchor) {
   let left = rtl ? a.right - m.width : a.left;
   left = Math.max(pad, Math.min(left, innerWidth - m.width - pad));
   let top = a.bottom + 6;
-  if (top + m.height > innerHeight - pad) top = Math.max(pad, a.top - m.height - 6);
+  if (top + m.height > innerHeight - pad) top = a.top - m.height - 6;      // flip above
+  top = Math.max(pad, Math.min(top, innerHeight - m.height - pad));        // keep on screen
   menu.style.left = left + 'px';
   menu.style.top  = top + 'px';
 }
@@ -601,9 +859,403 @@ function toast(msg) {
 }
 
 /* ============================================================
+   DRAG TO REORDER
+   Pointer events, so one code path covers mouse, pen and touch.
+   The dragged card follows the finger; its neighbours slide out
+   of the way. Nothing is written until the drop.
+   ============================================================ */
+let drag = null;
+
+function startDrag(e, li) {
+  if (drag || (e.button != null && e.button !== 0)) return;
+  e.preventDefault();
+  closeMenu();
+
+  const list  = el.activeList;
+  const items = [...list.children];
+  const from  = items.indexOf(li);
+  if (from < 0) return;
+
+  const rects = items.map(n => n.getBoundingClientRect());
+  const gap   = rects.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 8;
+
+  drag = { li, items, rects, gap, from, to: from, startY: e.clientY, moved: false };
+
+  li.classList.add('is-dragging');
+  document.body.classList.add('is-reordering');
+  e.currentTarget.setPointerCapture?.(e.pointerId);
+
+  document.addEventListener('pointermove', onDragMove, { passive: false });
+  document.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointercancel', endDrag);
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+
+  const dy = e.clientY - drag.startY;
+  if (Math.abs(dy) > 3) drag.moved = true;
+  drag.li.style.transform = `translateY(${dy}px)`;
+
+  const r0     = drag.rects[drag.from];
+  const centre = r0.top + r0.height / 2 + dy;
+  const last   = drag.rects.length - 1;
+
+  let to = drag.from;
+  if (centre <= drag.rects[0].top) to = 0;
+  else if (centre >= drag.rects[last].bottom) to = last;
+  else {
+    for (let i = 0; i <= last; i++) {
+      if (i === drag.from) continue;
+      const r = drag.rects[i];
+      if (centre >= r.top && centre <= r.bottom) { to = i; break; }
+    }
+  }
+
+  if (to !== drag.to) { drag.to = to; paintShift(); }
+}
+
+/** Slide the cards the dragged one is passing over. */
+function paintShift() {
+  const { items, rects, gap, from, to, li } = drag;
+  const step = rects[from].height + gap;
+  items.forEach((n, i) => {
+    if (n === li) return;
+    let shift = 0;
+    if (from < to && i > from && i <= to) shift = -step;
+    if (from > to && i >= to && i < from) shift =  step;
+    n.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+
+function endDrag() {
+  if (!drag) return;
+  document.removeEventListener('pointermove', onDragMove);
+  document.removeEventListener('pointerup', endDrag);
+  document.removeEventListener('pointercancel', endDrag);
+
+  const { li, items, from, to, moved } = drag;
+  drag = null;
+
+  li.classList.remove('is-dragging');
+  document.body.classList.remove('is-reordering');
+  items.forEach(n => { n.style.transform = ''; });
+
+  if (!moved || to === from) return;
+
+  const ids = items.map(n => n.dataset.id);
+  const [movedId] = ids.splice(from, 1);
+  ids.splice(to, 0, movedId);
+  applyOrder(ids);
+  render();
+}
+
+/* ============================================================
+   COMPLETION — confetti, then "when did you start?"
+   ============================================================ */
+function completeTask(task, node) {
+  burstConfetti();
+  animateOut(node, () => { render(); openDoneSheet(task); });
+}
+
+const doneSheet = {
+  root:  $('#doneSheet'),
+  title: $('#doneSheetTask'),
+  quick: $('#doneQuick'),
+  start: $('#doneStart'),
+  end:   $('#doneEnd'),
+  dur:   $('#doneDuration'),
+  save:  $('#doneSaveBtn'),
+  skip:  $('#doneSkipBtn'),
+};
+let doneTarget = null;
+
+function openDoneSheet(task) {
+  doneTarget = task;
+  doneSheet.title.textContent = task.title;
+
+  const end = task.finished_at ? new Date(task.finished_at) : new Date();
+  doneSheet.end.value   = hhmm(end);
+  doneSheet.start.value = task.started_at ? hhmm(task.started_at) : (task.planned_at ?? '');
+
+  doneSheet.quick.replaceChildren(...[15, 30, 60, 120].map(m => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'quick';
+    b.textContent = m < 60 ? `לפני ${m} דק׳` : m === 60 ? 'לפני שעה' : 'לפני שעתיים';
+    b.addEventListener('click', () => {
+      doneSheet.start.value = hhmm(new Date(end.getTime() - m * 60000));
+      updateDuration();
+    });
+    return b;
+  }));
+
+  updateDuration();
+  doneSheet.root.hidden = false;
+  doneSheet.start.focus();
+}
+
+function updateDuration() {
+  if (!doneTarget) return;
+  const s = isoAt(doneTarget.task_date, doneSheet.start.value);
+  const e = isoAt(doneTarget.task_date, doneSheet.end.value);
+  const m = minutesBetween(s, e);
+  doneSheet.dur.textContent = m == null ? '' : `משך העבודה: ${humanDuration(m)}`;
+  doneSheet.dur.hidden = m == null;
+}
+
+function closeDoneSheet() {
+  doneSheet.root.hidden = true;
+  doneTarget = null;
+}
+
+doneSheet.start.addEventListener('change', updateDuration);
+doneSheet.end.addEventListener('change', updateDuration);
+
+doneSheet.save.addEventListener('click', () => {
+  const t = doneTarget;
+  if (!t) return closeDoneSheet();
+  const s = isoAt(t.task_date, doneSheet.start.value);
+  const e = isoAt(t.task_date, doneSheet.end.value) ?? new Date().toISOString();
+  setTaskTimes(t, s, e);
+  const m = minutesBetween(s, e);
+  closeDoneSheet();
+  render();
+  toast(m == null ? 'נשמר' : `נרשמו ${humanDuration(m)} על המשימה`);
+});
+
+doneSheet.skip.addEventListener('click', () => { closeDoneSheet(); render(); });
+$$('[data-done-close]').forEach(b => b.addEventListener('click', () => { closeDoneSheet(); render(); }));
+
+/* ============================================================
+   CLIENT TAG
+   ============================================================ */
+const clientSheet = {
+  root:   $('#clientSheet'),
+  input:  $('#clientInput'),
+  list:   $('#clientList'),
+  recent: $('#clientRecent'),
+  save:   $('#clientSaveBtn'),
+  clear:  $('#clientClearBtn'),
+};
+let clientTarget = null;
+
+function openClientSheet(task) {
+  clientTarget = task;
+  clientSheet.input.value = task.client ?? '';
+
+  const known = knownClients();
+  clientSheet.list.replaceChildren(...known.map(c =>
+    Object.assign(document.createElement('option'), { value: c })));
+
+  clientSheet.recent.replaceChildren(...known.slice(0, 8).map(c => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip chip--client chip--pick';
+    b.style.setProperty('--hue', clientHue(c));
+    b.textContent = c;
+    b.addEventListener('click', () => { clientSheet.input.value = c; saveClient(); });
+    return b;
+  }));
+  clientSheet.recent.hidden = known.length === 0;
+
+  clientSheet.root.hidden = false;
+  clientSheet.input.focus();
+  clientSheet.input.select();
+}
+
+function closeClientSheet() { clientSheet.root.hidden = true; clientTarget = null; }
+
+function saveClient() {
+  if (!clientTarget) return closeClientSheet();
+  const v = clientSheet.input.value;
+  setTaskClient(clientTarget, v);
+  closeClientSheet();
+  render();
+  toast(v.trim() ? `שויך ל${v.trim()}` : 'השיוך הוסר');
+}
+
+clientSheet.save.addEventListener('click', saveClient);
+clientSheet.clear.addEventListener('click', () => {
+  if (clientTarget) setTaskClient(clientTarget, '');
+  closeClientSheet();
+  render();
+  toast('השיוך הוסר');
+});
+clientSheet.input.addEventListener('keydown', e => { if (e.key === 'Enter') saveClient(); });
+$$('[data-client-close]').forEach(b => b.addEventListener('click', closeClientSheet));
+
+/* ============================================================
+   CONFETTI — a short canvas burst, no dependencies
+   ============================================================ */
+function burstConfetti() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const canvas = $('#confetti');
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+
+  canvas.width  = innerWidth  * dpr;
+  canvas.height = innerHeight * dpr;
+  canvas.style.display = 'block';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const colours = ['#5FA3DE', '#22C55E', '#F59E0B', '#7CBAEA', '#A78BFA', '#F472B6'];
+  const bits = Array.from({ length: 110 }, () => ({
+    x: innerWidth / 2 + (Math.random() - .5) * 260,
+    y: innerHeight * .3,
+    vx: (Math.random() - .5) * 10,
+    vy: -(5 + Math.random() * 10),
+    w: 5 + Math.random() * 6,
+    h: 8 + Math.random() * 8,
+    rot: Math.random() * Math.PI,
+    vr: (Math.random() - .5) * .32,
+    colour: colours[(Math.random() * colours.length) | 0],
+  }));
+
+  let frame = 0;
+  (function tick() {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    let alive = false;
+    for (const b of bits) {
+      b.vy += .46; b.vx *= .99;
+      b.x += b.vx; b.y += b.vy; b.rot += b.vr;
+      if (b.y < innerHeight + 40) alive = true;
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.rot);
+      ctx.fillStyle = b.colour;
+      ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h);
+      ctx.restore();
+    }
+    if (alive && ++frame < 170) requestAnimationFrame(tick);
+    else { ctx.clearRect(0, 0, innerWidth, innerHeight); canvas.style.display = 'none'; }
+  })();
+}
+
+/* ============================================================
+   DAILY REPORT
+   ============================================================ */
+const reportSheet = { root: $('#reportSheet'), body: $('#reportBody') };
+const NO_CLIENT = 'ללא לקוח';
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function reportData(date) {
+  const rows = byDate(date);
+  const done = rows.filter(t => t.done);
+  const open = rows.filter(t => !t.done);
+
+  const timed = done
+    .map(t => ({ t, mins: minutesBetween(t.started_at, t.finished_at) }))
+    .filter(x => x.mins != null);
+  const totalMins = timed.reduce((n, x) => n + x.mins, 0);
+
+  const byClient = new Map();
+  rows.forEach(t => {
+    const key = t.client ?? NO_CLIENT;
+    const c = byClient.get(key) ?? { name: key, total: 0, done: 0, mins: 0 };
+    c.total++;
+    if (t.done) c.done++;
+    const m = minutesBetween(t.started_at, t.finished_at);
+    if (m != null) c.mins += m;
+    byClient.set(key, c);
+  });
+
+  return {
+    rows, done, open, timed, totalMins,
+    pct: rows.length ? Math.round(done.length / rows.length * 100) : 0,
+    clients: [...byClient.values()].sort((a, b) => b.total - a.total),
+  };
+}
+
+function openReport() {
+  const d = reportData(state.date);
+  const maxTotal = Math.max(1, ...d.clients.map(c => c.total));
+
+  const clientRows = d.clients.map(c => `
+    <div class="rep__bar">
+      <div class="rep__bar-head">
+        <span class="chip${c.name === NO_CLIENT ? '' : ' chip--client'}" style="--hue:${clientHue(c.name)}">${esc(c.name)}</span>
+        <span class="rep__bar-meta">${c.done}/${c.total}${c.mins ? ' · ' + esc(humanDuration(c.mins)) : ''}</span>
+      </div>
+      <div class="rep__track"><i style="width:${Math.round(c.total / maxTotal * 100)}%"></i></div>
+    </div>`).join('');
+
+  const timeline = d.timed.length ? d.timed
+    .sort((a, b) => (a.t.finished_at ?? '').localeCompare(b.t.finished_at ?? ''))
+    .map(x => `
+      <li class="rep__row">
+        <span class="rep__time" dir="ltr">${hhmm(x.t.started_at)}–${hhmm(x.t.finished_at)}</span>
+        <span class="rep__task">${esc(x.t.title)}</span>
+        <span class="rep__dur">${esc(humanDuration(x.mins))}</span>
+      </li>`).join('') : '';
+
+  const leftovers = d.open.map(t => `<li class="rep__row rep__row--open"><span class="rep__task">${esc(t.title)}</span>${
+    t.client ? `<span class="chip chip--client" style="--hue:${clientHue(t.client)}">${esc(t.client)}</span>` : ''
+  }</li>`).join('');
+
+  reportSheet.body.innerHTML = `
+    <p class="rep__date">${esc(heDayName(state.date))} · ${esc(heDate(state.date))}</p>
+
+    <div class="rep__hero">
+      <div class="rep__ring" style="--pct:${d.pct}">
+        <span>${d.pct}<small>%</small></span>
+      </div>
+      <div class="rep__kpis">
+        <div class="rep__kpi"><b>${d.done.length}</b><span>הושלמו</span></div>
+        <div class="rep__kpi"><b>${d.open.length}</b><span>נותרו</span></div>
+        <div class="rep__kpi"><b>${d.totalMins ? esc(humanDuration(d.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
+      </div>
+    </div>
+
+    ${d.clients.length ? `<h3 class="rep__h">לפי לקוח</h3>${clientRows}` : ''}
+    ${timeline ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
+    ${leftovers ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
+    ${d.rows.length ? '' : '<p class="rep__empty">אין משימות ליום הזה.</p>'}
+
+    <div class="btn-row rep__actions">
+      <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
+    </div>`;
+
+  $('#repCopy')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(reportText(d)); toast('הדוח הועתק'); }
+    catch { toast('ההעתקה נכשלה'); }
+  });
+
+  reportSheet.root.hidden = false;
+}
+
+function reportText(d) {
+  const lines = [
+    `דוח משימות · ${heDayName(state.date)} ${heDate(state.date)}`,
+    `הושלמו ${d.done.length} מתוך ${d.rows.length} (${d.pct}%)`,
+  ];
+  if (d.totalMins) lines.push(`זמן עבודה מתועד: ${humanDuration(d.totalMins)}`);
+  if (d.clients.length) {
+    lines.push('', 'לפי לקוח:');
+    d.clients.forEach(c => lines.push(`· ${c.name} — ${c.done}/${c.total}${c.mins ? ` (${humanDuration(c.mins)})` : ''}`));
+  }
+  if (d.timed.length) {
+    lines.push('', 'מה נעשה:');
+    d.timed.forEach(x => lines.push(`· ${hhmm(x.t.started_at)}–${hhmm(x.t.finished_at)} ${x.t.title} (${humanDuration(x.mins)})`));
+  }
+  if (d.open.length) {
+    lines.push('', 'נשאר פתוח:');
+    d.open.forEach(t => lines.push(`· ${t.title}`));
+  }
+  return lines.join('\n');
+}
+
+function closeReport() { reportSheet.root.hidden = true; }
+$$('[data-report-close]').forEach(b => b.addEventListener('click', closeReport));
+$('#reportBtn').addEventListener('click', openReport);
+
+/* ============================================================
    CLOUD  (Supabase)
    ============================================================ */
-const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,created_at,updated_at';
+const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
+             'client,planned_at,started_at,finished_at,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -611,11 +1263,15 @@ const toRow = t => ({
   task_date: t.task_date,
   title: t.title,
   done: t.done,
-  completed_at: t.completed_at,
+  completed_at: t.completed_at ?? null,
   status: t.status ?? null,
   collapsed: t.collapsed,
   position: t.position,
   subtasks: t.subtasks,
+  client: t.client ?? null,
+  planned_at: t.planned_at ?? null,
+  started_at: t.started_at ?? null,
+  finished_at: t.finished_at ?? null,
   created_at: t.created_at,
   updated_at: t.updated_at,
 });
@@ -702,7 +1358,7 @@ async function pull() {
     state.tasks = [
       ...state.tasks.filter(t =>
         (!dates.includes(t.task_date) || pending.has(t.id)) && !incomingIds.has(t.id)),
-      ...incoming.map(r => ({ ...r, subtasks: r.subtasks ?? [] })),
+      ...incoming.map(normalize),
     ];
 
     // open tasks left behind on earlier dates
@@ -812,8 +1468,8 @@ function explain(err) {
   if (m.includes('already registered'))     return 'החשבון כבר קיים — אפשר להתחבר.';
   if (m.includes('relation') && m.includes('does not exist'))
                                             return 'טבלת tasks חסרה. הריצי את supabase/schema.sql ב-SQL Editor.';
-  if (m.includes('status') && m.includes('column'))
-                                            return 'חסרה עמודת status. הריצי שוב את supabase/schema.sql ב-SQL Editor.';
+  if (m.includes('column') && /status|client|planned_at|started_at|finished_at/.test(m))
+                                            return 'חסרה עמודה בטבלה. הריצי שוב את supabase/schema.sql ב-SQL Editor.';
   if (m.includes('password'))               return 'הסיסמה חייבת להכיל לפחות 6 תווים.';
   return err?.message ?? 'משהו השתבש.';
 }
@@ -887,6 +1543,9 @@ $$('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (menuEl) closeMenu();
+  else if (!doneSheet.root.hidden)   { closeDoneSheet(); render(); }
+  else if (!clientSheet.root.hidden) closeClientSheet();
+  else if (!reportSheet.root.hidden) closeReport();
   else if (!sheet.root.hidden) closeSheet();
 });
 
