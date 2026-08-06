@@ -634,6 +634,8 @@ a { color: var(--blue-900); }
   border-bottom: 1px solid var(--line);
 }
 .sheet__head h2 { font-size: 17px; font-weight: 700; letter-spacing: -.015em; }
+.sheet__head { gap: var(--s3); }
+.sheet__head .segmented + .icon-btn { margin-inline-start: 0; }
 .sheet__body { padding: var(--s5); overflow-y: auto; }
 .sheet__note {
   font-size: 13.5px; line-height: 1.6; color: var(--ink-2);
@@ -927,6 +929,148 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .rep__actions { margin-top: var(--s5); }
 
 /* ============================================================
+   MONEY — day strip, wallet, subscriptions
+   ============================================================ */
+.spend { display: flex; flex-direction: column; }
+.spend__row {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 10px var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  margin-bottom: 6px;
+}
+.spend__row.is-sub { background: var(--card); box-shadow: none; }
+.spend__label {
+  flex: 1; min-width: 0; text-align: start;
+  font-size: 14.5px; font-weight: 600; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.spend__label:hover { text-decoration: underline; }
+.spend__kind {
+  flex: none; height: 20px; padding-inline: 7px;
+  display: inline-flex; align-items: center;
+  border-radius: 999px; background: var(--blue-100); color: #17558F;
+  font-size: 11px; font-weight: 700;
+}
+.spend__amount {
+  flex: none; font-size: 14px; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.spend__add {
+  display: flex; align-items: center; gap: var(--s2);
+  width: 100%; min-height: 42px; padding: 0 var(--s3);
+  margin-top: 6px;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--ink-4);
+  color: var(--ink-2); font-size: 14px; font-weight: 600;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.spend__add:hover { background: var(--surface); color: var(--ink); border-color: var(--ink-3); }
+
+/* ---- month navigator inside sheets ---- */
+.monthnav {
+  display: flex; align-items: center; justify-content: center; gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+.monthnav__label {
+  min-width: 150px; text-align: center;
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em;
+}
+.monthnav .datenav__arrow[disabled] { opacity: .3; pointer-events: none; }
+
+/* ---- money tiles ---- */
+.moneyrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); margin-bottom: var(--s4); }
+.moneytile {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: var(--s3) var(--s2);
+  border-radius: var(--r-md);
+  background: var(--page);
+}
+.moneytile span { font-size: 11px; font-weight: 600; color: var(--ink-2); }
+.moneytile b {
+  font-size: 18px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wallet__note {
+  font-size: 13.5px; color: var(--ink-2);
+  background: var(--blue-100);
+  padding: var(--s3); border-radius: var(--r-sm);
+}
+.wallet__note strong { color: #17558F; font-weight: 700; }
+.wallet__empty { font-size: 13.5px; color: var(--ink-2); padding: var(--s3) 0; }
+
+/* ---- subscription row ---- */
+.subrow {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  margin-bottom: 6px;
+}
+.subrow.is-off { background: var(--card); box-shadow: none; }
+.subrow.is-off .subrow__name { color: var(--ink-2); }
+.subrow__main { flex: 1; min-width: 0; text-align: start; display: flex; flex-direction: column; gap: 1px; }
+.subrow__name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.subrow__meta { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.subrow__meta b { color: var(--green-ink); font-weight: 700; }
+.subrow__main:hover .subrow__name { text-decoration: underline; }
+
+/* ---- switch ---- */
+.switch { display: flex; align-items: center; gap: var(--s3); font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch__track {
+  width: 44px; height: 26px; flex: none;
+  display: block; position: relative;
+  border-radius: 999px; background: var(--ink-4);
+  transition: background var(--dur) var(--ease);
+}
+.switch__knob {
+  position: absolute; top: 3px; inset-inline-start: 3px;
+  width: 20px; height: 20px; border-radius: 999px;
+  background: #fff; box-shadow: var(--sh-1);
+  transition: transform var(--dur) var(--ease);
+}
+.switch input:checked + .switch__track { background: var(--green); }
+.switch input:checked + .switch__track .switch__knob { transform: translateX(-18px); }
+[dir="ltr"] .switch input:checked + .switch__track .switch__knob { transform: translateX(18px); }
+.subrow__toggle { cursor: pointer; }
+.subrow__toggle.is-on { background: var(--green); }
+.subrow__toggle.is-on .switch__knob { transform: translateX(-18px); }
+
+/* ---- expense row in the wallet ---- */
+.exprow {
+  display: flex; align-items: center; gap: var(--s3);
+  width: 100%; padding: 9px var(--s2);
+  border-top: 1px solid var(--line-soft);
+  font-size: 13.5px; text-align: start;
+}
+.exprow:first-child { border-top: 0; }
+.exprow:hover { background: var(--page); border-radius: var(--r-xs); }
+.exprow.is-sub .exprow__title { color: var(--ink-2); }
+.exprow__date { flex: none; width: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; font-weight: 600; }
+.exprow__title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.exprow__amount { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ---- segmented control in the report head ---- */
+.segmented {
+  display: inline-flex; gap: 2px; padding: 3px;
+  border-radius: 999px; background: var(--card);
+  margin-inline-start: auto;
+}
+.segmented__btn {
+  height: 28px; padding-inline: var(--s3);
+  border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--ink-2);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.segmented__btn.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--sh-1); }
+
+.field__hint { margin-top: 5px; font-size: 12px; color: var(--ink-2); }
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 560px) {
@@ -974,4 +1118,10 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
   }
+}
+
+/* money figures inside the report rows read as ink, not as a positive delta */
+.rep__money {
+  flex: none; font-size: 12.5px; font-weight: 700;
+  color: var(--ink); font-variant-numeric: tabular-nums;
 }

@@ -5,11 +5,13 @@
    ============================================================ */
 
 const LS = {
-  tasks:   'tasks.v1',
-  queue:   'queue.v1',
-  cfg:     'cfg.v1',
-  ui:      'ui.v1',
-  clients: 'clients.v1',
+  tasks:    'tasks.v1',
+  queue:    'queue.v1',
+  cfg:      'cfg.v1',
+  ui:       'ui.v1',
+  clients:  'clients.v1',
+  subs:     'subs.v1',
+  expenses: 'expenses.v1',
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -113,19 +115,51 @@ const normalize = t => ({
   subtasks: (t.subtasks ?? []).map(s => ({ status: null, ...s })),
 });
 
+/** Postgres `numeric` can arrive as a string — coerce so maths stays maths. */
+const normalizeSub = s => ({ ...s, amount: Number(s.amount) || 0, billing_day: Number(s.billing_day) || 1 });
+const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0 });
+
 const state = {
-  date:    isoDate(),
-  tasks:   read(LS.tasks, []).map(normalize),
-  queue:   read(LS.queue, []),
-  cfg:     read(LS.cfg, { url: '', key: '' }),
-  ui:      read(LS.ui, { doneOpen: true }),
-  user:    null,
-  sb:      null,
-  status:  'local',   // local | syncing | synced | error
-  earlier: [],        // open tasks from previous dates
+  date:     isoDate(),
+  tasks:    read(LS.tasks, []).map(normalize),
+  subs:     read(LS.subs, []),
+  expenses: read(LS.expenses, []),
+  queue:    read(LS.queue, []),
+  cfg:      read(LS.cfg, { url: '', key: '' }),
+  ui:       read(LS.ui, { doneOpen: true }),
+  user:     null,
+  sb:       null,
+  status:   'local',   // local | syncing | synced | error
+  earlier:  [],        // open tasks from previous dates
 };
 
-const persist = () => { write(LS.tasks, state.tasks); write(LS.queue, state.queue); };
+const persist = () => {
+  write(LS.tasks, state.tasks);
+  write(LS.subs, state.subs);
+  write(LS.expenses, state.expenses);
+  write(LS.queue, state.queue);
+};
+
+/* ---------- money ---------- */
+const money = n => '₪' + Number(n || 0).toLocaleString('he-IL', {
+  minimumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2,
+  maximumFractionDigits: 2,
+});
+
+/** 'YYYY-MM' for an ISO date (or today). */
+const monthOf = (iso = isoDate()) => iso.slice(0, 7);
+
+const heMonth = ym => new Date(ym + '-15T12:00:00')
+  .toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
+
+/** Step a 'YYYY-MM' by n months. */
+function shiftMonth(ym, n) {
+  const d = new Date(ym + '-15T12:00:00');
+  d.setMonth(d.getMonth() + n);
+  return isoDate(d).slice(0, 7);
+}
+
+const sum = (rows, pick) => rows.reduce((n, r) => n + Number(pick(r) || 0), 0);
 
 const byDate = d => state.tasks
   .filter(t => t.task_date === d)
@@ -139,14 +173,18 @@ const nextPosition = d => {
 /* ============================================================
    MUTATIONS  (local write → queue → flush)
    ============================================================ */
-function touch(task) {
-  task.updated_at = new Date().toISOString();
-  queueOp({ type: 'upsert', id: task.id });
+function touch(task) { touchRow('tasks', task); }
+
+/** Stamp a row and queue it for the cloud. Works for any of the three tables. */
+function touchRow(table, row) {
+  row.updated_at = new Date().toISOString();
+  queueOp({ type: 'upsert', table, id: row.id });
   persist();
 }
 
 function queueOp(op) {
-  state.queue = state.queue.filter(o => o.id !== op.id);
+  op.table ??= 'tasks';
+  state.queue = state.queue.filter(o => !(o.id === op.id && (o.table ?? 'tasks') === op.table));
   state.queue.push(op);
   write(LS.queue, state.queue);
   flush();
@@ -177,9 +215,126 @@ function addTask(title) {
 
 function deleteTask(id) {
   state.tasks = state.tasks.filter(t => t.id !== id);
-  queueOp({ type: 'delete', id });
+  queueOp({ type: 'delete', table: 'tasks', id });
   persist();
 }
+
+/* ============================================================
+   SUBSCRIPTIONS & EXPENSES
+   A subscription is the *definition* — what it costs and when it
+   bills. Every month it is active it stamps a row into expenses,
+   so cancelling later never erases what was already paid.
+   ============================================================ */
+function addSubscription({ name, amount, billing_day, active, started_on }) {
+  const sub = {
+    id: uid(),
+    name: name.trim(),
+    amount: Number(amount) || 0,
+    billing_day: Math.min(28, Math.max(1, Number(billing_day) || 1)),
+    active: active !== false,
+    started_on: started_on ?? isoDate().slice(0, 8) + '01',
+    cancelled_on: null,
+    note: null,
+    position: state.subs.length,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.subs.push(sub);
+  touchRow('subscriptions', sub);
+  return sub;
+}
+
+function updateSubscription(sub, patch) {
+  const wasActive = sub.active;
+  Object.assign(sub, patch);
+  if (wasActive && sub.active === false && !sub.cancelled_on) sub.cancelled_on = isoDate();
+  if (sub.active) sub.cancelled_on = null;
+  touchRow('subscriptions', sub);
+}
+
+/** Deleting the definition keeps the charges — they are the record. */
+function deleteSubscription(id) {
+  state.subs = state.subs.filter(s => s.id !== id);
+  state.expenses.forEach(e => {
+    if (e.subscription_id === id) { e.subscription_id = null; touchRow('expenses', e); }
+  });
+  queueOp({ type: 'delete', table: 'subscriptions', id });
+  persist();
+}
+
+function addExpense({ title, amount, spend_date, client, kind, subscription_id, period }) {
+  const exp = {
+    id: uid(),
+    spend_date: spend_date ?? state.date,
+    title: (title ?? '').trim(),
+    amount: Number(amount) || 0,
+    kind: kind ?? 'oneoff',
+    subscription_id: subscription_id ?? null,
+    period: period ?? null,
+    client: (client ?? '').trim() || null,
+    note: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.expenses.push(exp);
+  if (exp.client) rememberClient(exp.client);
+  touchRow('expenses', exp);
+  return exp;
+}
+
+function updateExpense(exp, patch) {
+  Object.assign(exp, patch);
+  if (exp.client) rememberClient(exp.client);
+  touchRow('expenses', exp);
+}
+
+function deleteExpense(id) {
+  state.expenses = state.expenses.filter(e => e.id !== id);
+  queueOp({ type: 'delete', table: 'expenses', id });
+  persist();
+}
+
+/**
+ * Write the missing monthly charges for every subscription, from the
+ * month it started up to the current month. Runs on load and after any
+ * change — it only ever adds what is not already there.
+ */
+function ensureCharges() {
+  const thisMonth = monthOf();
+  const today = Number(isoDate().slice(8, 10));
+  let added = 0;
+
+  for (const sub of state.subs) {
+    const from = monthOf(sub.started_on ?? sub.created_at?.slice(0, 10) ?? isoDate());
+    const until = sub.active ? thisMonth : monthOf(sub.cancelled_on ?? thisMonth);
+
+    let ym = from;
+    for (let guard = 0; guard < 36 && ym <= until && ym <= thisMonth; guard++) {
+      const already = state.expenses.some(e => e.subscription_id === sub.id && e.period === ym);
+      // the current month only counts once the billing day has arrived
+      const due = ym < thisMonth || sub.billing_day <= today;
+      if (!already && due) {
+        addExpense({
+          title: sub.name,
+          amount: sub.amount,
+          spend_date: `${ym}-${String(sub.billing_day).padStart(2, '0')}`,
+          kind: 'subscription',
+          subscription_id: sub.id,
+          period: ym,
+        });
+        added++;
+      }
+      ym = shiftMonth(ym, 1);
+    }
+  }
+  return added;
+}
+
+/* ---------- expense queries ---------- */
+const expensesOn    = date => state.expenses.filter(e => e.spend_date === date)
+                                            .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+const expensesIn    = ym   => state.expenses.filter(e => (e.spend_date ?? '').slice(0, 7) === ym);
+const monthlyActive = ()   => sum(state.subs.filter(s => s.active), s => s.amount);
 
 /** Toggling the parent cascades to every subtask — predictable both ways. */
 function setTaskDone(task, done) {
@@ -332,6 +487,9 @@ const el = {
   syncChip:    $('#syncChip'),
   footStatus:  $('#footStatus'),
   toast:       $('#toast'),
+  spendList:   $('#spendList'),
+  spendAdd:    $('#spendAdd'),
+  spendTitle:  $('#spendHeading'),
 };
 
 const ICON = {
@@ -402,6 +560,53 @@ function render() {
   el.carryText.innerHTML = carry.length === 1
     ? '<strong>משימה אחת</strong> נשארה פתוחה מימים קודמים'
     : `<strong>${carry.length} משימות</strong> נשארו פתוחות מימים קודמים`;
+
+  renderSpend();
+}
+
+/** The day's spending, right under the task lists. */
+function renderSpend() {
+  const rows = expensesOn(state.date);
+  const total = sum(rows, e => e.amount);
+
+  el.spendTitle.textContent = rows.length
+    ? `הוצאות היום · ${money(total)}`
+    : 'הוצאות היום';
+
+  el.spendList.replaceChildren(...rows.map(exp => {
+    const li = document.createElement('li');
+    li.className = 'spend__row' + (exp.kind === 'subscription' ? ' is-sub' : '');
+
+    const label = document.createElement('button');
+    label.type = 'button';
+    label.className = 'spend__label';
+    label.textContent = exp.title;
+    label.title = exp.kind === 'subscription' ? 'חיוב מנוי חודשי' : 'עריכת ההוצאה';
+    label.addEventListener('click', () => openExpSheet(exp));
+    li.append(label);
+
+    if (exp.kind === 'subscription') {
+      const tag = document.createElement('span');
+      tag.className = 'spend__kind';
+      tag.textContent = 'מנוי';
+      li.append(tag);
+    }
+    if (exp.client) {
+      const c = document.createElement('span');
+      c.className = 'chip chip--client';
+      c.style.setProperty('--hue', clientHue(exp.client));
+      c.textContent = exp.client;
+      li.append(c);
+    }
+
+    const amt = document.createElement('span');
+    amt.className = 'spend__amount';
+    amt.dir = 'ltr';
+    amt.textContent = money(exp.amount);
+    li.append(amt);
+
+    return li;
+  }));
 }
 
 function taskNode(task) {
@@ -1087,6 +1292,269 @@ clientSheet.input.addEventListener('keydown', e => { if (e.key === 'Enter') save
 $$('[data-client-close]').forEach(b => b.addEventListener('click', closeClientSheet));
 
 /* ============================================================
+   WALLET — subscriptions and what they actually cost
+   ============================================================ */
+const walletSheet = { root: $('#walletSheet'), body: $('#walletBody') };
+let walletMonth = monthOf();
+
+function openWallet() {
+  walletMonth = monthOf();
+  renderWallet();
+  walletSheet.root.hidden = false;
+}
+function closeWallet() { walletSheet.root.hidden = true; }
+
+function renderWallet() {
+  ensureCharges();
+
+  const rows     = expensesIn(walletMonth);
+  const subRows  = rows.filter(e => e.kind === 'subscription');
+  const oneRows  = rows.filter(e => e.kind !== 'subscription');
+  const active   = state.subs.filter(s => s.active);
+  const inactive = state.subs.filter(s => !s.active);
+  const isNow    = walletMonth === monthOf();
+
+  const b = walletSheet.body;
+  b.innerHTML = `
+    <div class="monthnav">
+      <button class="datenav__arrow" id="wPrev" type="button" aria-label="חודש קודם">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="monthnav__label">${esc(heMonth(walletMonth))}</span>
+      <button class="datenav__arrow" id="wNext" type="button" aria-label="חודש הבא" ${isNow ? 'disabled' : ''}>
+        <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+    <div class="moneyrow">
+      <div class="moneytile">
+        <span>סה״כ החודש</span>
+        <b dir="ltr">${money(sum(rows, e => e.amount))}</b>
+      </div>
+      <div class="moneytile">
+        <span>מנויים</span>
+        <b dir="ltr">${money(sum(subRows, e => e.amount))}</b>
+      </div>
+      <div class="moneytile">
+        <span>חד־פעמי</span>
+        <b dir="ltr">${money(sum(oneRows, e => e.amount))}</b>
+      </div>
+    </div>
+
+    <p class="wallet__note">התחייבות חודשית שוטפת על מנויים פעילים: <strong dir="ltr">${money(monthlyActive())}</strong></p>
+
+    <h3 class="rep__h">מנויים פעילים</h3>
+    <div id="wActive"></div>
+    ${inactive.length ? '<h3 class="rep__h">מנויים לא פעילים</h3><div id="wInactive"></div>' : ''}
+    <button class="spend__add" id="wAddSub" type="button"><span aria-hidden="true">+</span><span>הוספת מנוי</span></button>
+
+    <h3 class="rep__h">הוצאות החודש</h3>
+    <div id="wExpenses"></div>
+    <button class="spend__add" id="wAddExp" type="button"><span aria-hidden="true">+</span><span>הוספת הוצאה</span></button>`;
+
+  const subNode = sub => {
+    const charged = state.expenses.find(e => e.subscription_id === sub.id && e.period === walletMonth);
+    const row = document.createElement('div');
+    row.className = 'subrow' + (sub.active ? '' : ' is-off');
+
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'subrow__main';
+    main.innerHTML =
+      `<span class="subrow__name">${esc(sub.name)}</span>` +
+      `<span class="subrow__meta">${esc(money(sub.amount))} · חיוב ב-${sub.billing_day} בחודש` +
+      (charged ? ' · <b>חויב</b>' : sub.active ? '' : ' · בוטל') + '</span>';
+    main.addEventListener('click', () => openSubSheet(sub));
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'switch__track subrow__toggle' + (sub.active ? ' is-on' : '');
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-checked', String(!!sub.active));
+    toggle.setAttribute('aria-label', sub.active ? `כיבוי המנוי ${sub.name}` : `הפעלת המנוי ${sub.name}`);
+    toggle.innerHTML = '<span class="switch__knob"></span>';
+    toggle.addEventListener('click', () => {
+      updateSubscription(sub, { active: !sub.active });
+      ensureCharges();
+      renderWallet();
+      render();
+      toast(sub.active ? `${sub.name} פעיל שוב` : `${sub.name} סומן כלא פעיל`);
+    });
+
+    row.append(main, toggle);
+    return row;
+  };
+
+  const activeBox = $('#wActive', b);
+  if (active.length) activeBox.replaceChildren(...active.map(subNode));
+  else activeBox.innerHTML = '<p class="wallet__empty">אין עדיין מנויים. הוסיפי את הראשון כדי לראות את ההוצאה החודשית.</p>';
+
+  if (inactive.length) $('#wInactive', b).replaceChildren(...inactive.map(subNode));
+
+  const expBox = $('#wExpenses', b);
+  if (rows.length) {
+    expBox.replaceChildren(...rows
+      .slice()
+      .sort((x, y) => (x.spend_date ?? '').localeCompare(y.spend_date ?? ''))
+      .map(exp => {
+        const r = document.createElement('button');
+        r.type = 'button';
+        r.className = 'exprow' + (exp.kind === 'subscription' ? ' is-sub' : '');
+        r.innerHTML =
+          `<span class="exprow__date" dir="ltr">${esc((exp.spend_date ?? '').slice(8, 10))}</span>` +
+          `<span class="exprow__title">${esc(exp.title)}</span>` +
+          (exp.client ? `<span class="chip chip--client" style="--hue:${clientHue(exp.client)}">${esc(exp.client)}</span>` : '') +
+          `<span class="exprow__amount" dir="ltr">${esc(money(exp.amount))}</span>`;
+        r.addEventListener('click', () => openExpSheet(exp));
+        return r;
+      }));
+  } else {
+    expBox.innerHTML = '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>';
+  }
+
+  $('#wPrev', b).addEventListener('click', () => { walletMonth = shiftMonth(walletMonth, -1); renderWallet(); });
+  $('#wNext', b).addEventListener('click', () => {
+    if (walletMonth >= monthOf()) return;
+    walletMonth = shiftMonth(walletMonth, 1);
+    renderWallet();
+  });
+  $('#wAddSub', b).addEventListener('click', () => openSubSheet(null));
+  $('#wAddExp', b).addEventListener('click', () => openExpSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
+}
+
+$('#walletBtn').addEventListener('click', openWallet);
+$$('[data-wallet-close]').forEach(x => x.addEventListener('click', closeWallet));
+
+/* ---------- subscription editor ---------- */
+const subSheet = {
+  root:   $('#subSheet'),
+  title:  $('#subSheetTitle'),
+  name:   $('#subName'),
+  amount: $('#subAmount'),
+  day:    $('#subDay'),
+  started:$('#subStarted'),
+  active: $('#subActive'),
+  msg:    $('#subMsg'),
+  save:   $('#subSaveBtn'),
+  del:    $('#subDeleteBtn'),
+};
+let subTarget = null;
+
+function openSubSheet(sub) {
+  subTarget = sub;
+  subSheet.title.textContent = sub ? 'עריכת מנוי' : 'מנוי חדש';
+  subSheet.name.value    = sub?.name ?? '';
+  subSheet.amount.value  = sub ? sub.amount : '';
+  subSheet.day.value     = sub?.billing_day ?? 1;
+  subSheet.started.value = (sub?.started_on ?? isoDate()).slice(0, 7);
+  subSheet.active.checked = sub ? !!sub.active : true;
+  subSheet.del.hidden = !sub;
+  subSheet.msg.hidden = true;
+  subSheet.root.hidden = false;
+  subSheet.name.focus();
+}
+function closeSubSheet() { subSheet.root.hidden = true; subTarget = null; }
+
+subSheet.save.addEventListener('click', () => {
+  const name = subSheet.name.value.trim();
+  const amount = Number(subSheet.amount.value);
+  if (!name) { subSheet.msg.textContent = 'צריך שם לפלטפורמה.'; subSheet.msg.dataset.tone = 'error'; subSheet.msg.hidden = false; return; }
+  if (!(amount >= 0)) { subSheet.msg.textContent = 'הסכום צריך להיות מספר.'; subSheet.msg.dataset.tone = 'error'; subSheet.msg.hidden = false; return; }
+
+  const patch = {
+    name,
+    amount,
+    billing_day: Math.min(28, Math.max(1, Number(subSheet.day.value) || 1)),
+    active: subSheet.active.checked,
+    started_on: (subSheet.started.value || isoDate().slice(0, 7)) + '-01',
+  };
+
+  if (subTarget) updateSubscription(subTarget, patch);
+  else addSubscription(patch);
+
+  ensureCharges();
+  closeSubSheet();
+  renderWallet();
+  render();
+  toast(subTarget ? 'המנוי עודכן' : 'המנוי נוסף');
+});
+
+subSheet.del.addEventListener('click', () => {
+  if (!subTarget) return closeSubSheet();
+  const name = subTarget.name;
+  deleteSubscription(subTarget.id);
+  closeSubSheet();
+  renderWallet();
+  render();
+  toast(`${name} נמחק — החיובים שכבר תועדו נשארו`);
+});
+$$('[data-sub-close]').forEach(x => x.addEventListener('click', closeSubSheet));
+
+/* ---------- expense editor ---------- */
+const expSheet = {
+  root:    $('#expSheet'),
+  title:   $('#expSheetTitle'),
+  name:    $('#expTitle'),
+  names:   $('#expTitleList'),
+  amount:  $('#expAmount'),
+  date:    $('#expDate'),
+  client:  $('#expClient'),
+  clients: $('#expClientList'),
+  msg:     $('#expMsg'),
+  save:    $('#expSaveBtn'),
+  del:     $('#expDeleteBtn'),
+};
+let expTarget = null;
+
+function openExpSheet(exp, defaultDate) {
+  expTarget = exp;
+  expSheet.title.textContent = exp
+    ? (exp.kind === 'subscription' ? 'חיוב מנוי' : 'עריכת הוצאה')
+    : 'הוצאה חדשה';
+  expSheet.name.value   = exp?.title ?? '';
+  expSheet.amount.value = exp ? exp.amount : '';
+  expSheet.date.value   = exp?.spend_date ?? defaultDate ?? state.date;
+  expSheet.client.value = exp?.client ?? '';
+  expSheet.del.hidden   = !exp;
+  expSheet.msg.hidden   = true;
+
+  const pastTitles = [...new Set(state.expenses.filter(e => e.kind !== 'subscription').map(e => e.title))];
+  expSheet.names.replaceChildren(...pastTitles.map(t => Object.assign(document.createElement('option'), { value: t })));
+  expSheet.clients.replaceChildren(...knownClients().map(c => Object.assign(document.createElement('option'), { value: c })));
+
+  expSheet.root.hidden = false;
+  expSheet.name.focus();
+}
+function closeExpSheet() { expSheet.root.hidden = true; expTarget = null; }
+
+expSheet.save.addEventListener('click', () => {
+  const title = expSheet.name.value.trim();
+  const amount = Number(expSheet.amount.value);
+  if (!title) { expSheet.msg.textContent = 'צריך לכתוב על מה ההוצאה.'; expSheet.msg.dataset.tone = 'error'; expSheet.msg.hidden = false; return; }
+  if (!(amount >= 0)) { expSheet.msg.textContent = 'הסכום צריך להיות מספר.'; expSheet.msg.dataset.tone = 'error'; expSheet.msg.hidden = false; return; }
+
+  const patch = { title, amount, spend_date: expSheet.date.value || state.date, client: expSheet.client.value.trim() || null };
+  if (expTarget) updateExpense(expTarget, patch);
+  else addExpense(patch);
+
+  closeExpSheet();
+  if (!walletSheet.root.hidden) renderWallet();
+  render();
+  toast('ההוצאה נשמרה');
+});
+
+expSheet.del.addEventListener('click', () => {
+  if (!expTarget) return closeExpSheet();
+  deleteExpense(expTarget.id);
+  closeExpSheet();
+  if (!walletSheet.root.hidden) renderWallet();
+  render();
+  toast('ההוצאה נמחקה');
+});
+$$('[data-exp-close]').forEach(x => x.addEventListener('click', closeExpSheet));
+el.spendAdd.addEventListener('click', () => openExpSheet(null, state.date));
+
+/* ============================================================
    CONFETTI — a short canvas burst, no dependencies
    ============================================================ */
 function burstConfetti() {
@@ -1169,18 +1637,100 @@ function reportData(date) {
   };
 }
 
+let reportMode  = 'day';     // 'day' | 'month'
+let reportMonth = monthOf();
+let monthTasks  = null;      // tasks for reportMonth, fetched on demand
+
+/** Tasks for a whole month. From the cloud when connected, else local. */
+async function loadMonthTasks(ym) {
+  const from = ym + '-01';
+  const to   = shiftMonth(ym, 1) + '-01';
+  if (state.sb && state.user) {
+    const { data, error } = await state.sb
+      .from('tasks').select(COLS).gte('task_date', from).lt('task_date', to);
+    if (!error) return (data ?? []).map(normalize);
+  }
+  return state.tasks.filter(t => t.task_date >= from && t.task_date < to);
+}
+
+function monthData(ym, rows) {
+  const done  = rows.filter(t => t.done);
+  const timed = rows.map(t => ({ t, mins: minutesBetween(t.started_at, t.finished_at) }))
+                    .filter(x => x.mins != null);
+
+  const byClient = new Map();
+  const bump = (name, patch) => {
+    const c = byClient.get(name) ?? { name, total: 0, done: 0, mins: 0, spend: 0 };
+    Object.entries(patch).forEach(([k, v]) => { c[k] += v; });
+    byClient.set(name, c);
+  };
+  rows.forEach(t => {
+    const m = minutesBetween(t.started_at, t.finished_at);
+    bump(t.client ?? NO_CLIENT, { total: 1, done: t.done ? 1 : 0, mins: m ?? 0 });
+  });
+
+  const spend    = expensesIn(ym);
+  const subSpend = spend.filter(e => e.kind === 'subscription');
+  const oneSpend = spend.filter(e => e.kind !== 'subscription');
+  oneSpend.forEach(e => { if (e.client) bump(e.client, { total: 0, done: 0, mins: 0, spend: e.amount }); });
+
+  const bySub = new Map();
+  subSpend.forEach(e => bySub.set(e.title, (bySub.get(e.title) ?? 0) + Number(e.amount || 0)));
+
+  return {
+    rows, done, timed,
+    totalMins: timed.reduce((n, x) => n + x.mins, 0),
+    pct: rows.length ? Math.round(done.length / rows.length * 100) : 0,
+    clients: [...byClient.values()].sort((a, b) => b.total - a.total || b.spend - a.spend),
+    spend, subSpend, oneSpend,
+    subTotal: sum(subSpend, e => e.amount),
+    oneTotal: sum(oneSpend, e => e.amount),
+    total:    sum(spend,    e => e.amount),
+    bySub: [...bySub.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount),
+  };
+}
+
+const barRow = (label, meta, pct, hue) => `
+  <div class="rep__bar">
+    <div class="rep__bar-head">
+      <span class="chip${hue == null ? '' : ' chip--client'}"${hue == null ? '' : ` style="--hue:${hue}"`}>${esc(label)}</span>
+      <span class="rep__bar-meta">${esc(meta)}</span>
+    </div>
+    <div class="rep__track"><i style="width:${Math.max(2, Math.round(pct))}%"></i></div>
+  </div>`;
+
 function openReport() {
+  reportSheet.root.hidden = false;
+  drawReport();
+}
+
+async function drawReport() {
+  $('#reportSheetTitle').textContent = reportMode === 'day' ? 'דוח יומי' : 'דוח חודשי';
+  $('#repDay').classList.toggle('is-on', reportMode === 'day');
+  $('#repMonth').classList.toggle('is-on', reportMode === 'month');
+  $('#repDay').setAttribute('aria-selected', String(reportMode === 'day'));
+  $('#repMonth').setAttribute('aria-selected', String(reportMode === 'month'));
+
+  if (reportMode === 'day') return drawDayReport();
+
+  reportSheet.body.innerHTML = '<p class="rep__empty">טוען…</p>';
+  monthTasks = await loadMonthTasks(reportMonth);
+  drawMonthReport();
+}
+
+/* ---------------- daily ---------------- */
+function drawDayReport() {
   const d = reportData(state.date);
   const maxTotal = Math.max(1, ...d.clients.map(c => c.total));
+  const spend = expensesOn(state.date);
+  const spendTotal = sum(spend, e => e.amount);
 
-  const clientRows = d.clients.map(c => `
-    <div class="rep__bar">
-      <div class="rep__bar-head">
-        <span class="chip${c.name === NO_CLIENT ? '' : ' chip--client'}" style="--hue:${clientHue(c.name)}">${esc(c.name)}</span>
-        <span class="rep__bar-meta">${c.done}/${c.total}${c.mins ? ' · ' + esc(humanDuration(c.mins)) : ''}</span>
-      </div>
-      <div class="rep__track"><i style="width:${Math.round(c.total / maxTotal * 100)}%"></i></div>
-    </div>`).join('');
+  const clientRows = d.clients
+    .map(c => barRow(c.name,
+      `${c.done}/${c.total}${c.mins ? ' · ' + humanDuration(c.mins) : ''}`,
+      c.total / maxTotal * 100,
+      c.name === NO_CLIENT ? null : clientHue(c.name)))
+    .join('');
 
   const timeline = d.timed.length ? d.timed
     .sort((a, b) => (a.t.finished_at ?? '').localeCompare(b.t.finished_at ?? ''))
@@ -1191,47 +1741,128 @@ function openReport() {
         <span class="rep__dur">${esc(humanDuration(x.mins))}</span>
       </li>`).join('') : '';
 
-  const leftovers = d.open.map(t => `<li class="rep__row rep__row--open"><span class="rep__task">${esc(t.title)}</span>${
-    t.client ? `<span class="chip chip--client" style="--hue:${clientHue(t.client)}">${esc(t.client)}</span>` : ''
-  }</li>`).join('');
+  const leftovers = d.open.map(t => `
+    <li class="rep__row rep__row--open">
+      <span class="rep__task">${esc(t.title)}</span>
+      ${t.client ? `<span class="chip chip--client" style="--hue:${clientHue(t.client)}">${esc(t.client)}</span>` : ''}
+    </li>`).join('');
+
+  const spendRows = spend.map(e => `
+    <li class="rep__row">
+      <span class="rep__task">${esc(e.title)}</span>
+      ${e.kind === 'subscription' ? '<span class="spend__kind">מנוי</span>' : ''}
+      <span class="rep__money" dir="ltr">${esc(money(e.amount))}</span>
+    </li>`).join('');
 
   reportSheet.body.innerHTML = `
     <p class="rep__date">${esc(heDayName(state.date))} · ${esc(heDate(state.date))}</p>
 
     <div class="rep__hero">
-      <div class="rep__ring" style="--pct:${d.pct}">
-        <span>${d.pct}<small>%</small></span>
-      </div>
+      <div class="rep__ring" style="--pct:${d.pct}"><span>${d.pct}<small>%</small></span></div>
       <div class="rep__kpis">
         <div class="rep__kpi"><b>${d.done.length}</b><span>הושלמו</span></div>
         <div class="rep__kpi"><b>${d.open.length}</b><span>נותרו</span></div>
         <div class="rep__kpi"><b>${d.totalMins ? esc(humanDuration(d.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
+        <div class="rep__kpi"><b dir="ltr">${spendTotal ? esc(money(spendTotal)) : '—'}</b><span>הוצאות</span></div>
       </div>
     </div>
 
     ${d.clients.length ? `<h3 class="rep__h">לפי לקוח</h3>${clientRows}` : ''}
-    ${timeline ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
-    ${leftovers ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
-    ${d.rows.length ? '' : '<p class="rep__empty">אין משימות ליום הזה.</p>'}
+    ${timeline   ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
+    ${spendRows  ? `<h3 class="rep__h">הוצאות היום</h3><ul class="rep__list">${spendRows}</ul>` : ''}
+    ${leftovers  ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
+    ${d.rows.length || spend.length ? '' : '<p class="rep__empty">אין משימות או הוצאות ליום הזה.</p>'}
 
     <div class="btn-row rep__actions">
       <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
     </div>`;
 
-  $('#repCopy')?.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(reportText(d)); toast('הדוח הועתק'); }
-    catch { toast('ההעתקה נכשלה'); }
-  });
-
-  reportSheet.root.hidden = false;
+  $('#repCopy')?.addEventListener('click', () => copyText(dayReportText(d, spend, spendTotal)));
 }
 
-function reportText(d) {
+/* ---------------- monthly ---------------- */
+function drawMonthReport() {
+  const m = monthData(reportMonth, monthTasks ?? []);
+  const maxSpend = Math.max(1, ...m.bySub.map(s => s.amount), m.oneTotal);
+  const maxTotal = Math.max(1, ...m.clients.map(c => c.total));
+  const isNow = reportMonth === monthOf();
+
+  const subRows = m.bySub.map(s => barRow(s.name, money(s.amount), s.amount / maxSpend * 100, clientHue(s.name))).join('');
+
+  const maxClientSpend = Math.max(1, ...m.clients.map(c => c.spend));
+  const clientRows = m.clients
+    .map(c => barRow(c.name,
+      [c.total ? `${c.done}/${c.total}` : '', c.mins ? humanDuration(c.mins) : '', c.spend ? money(c.spend) : '']
+        .filter(Boolean).join(' · '),
+      Math.max(c.total / maxTotal, c.spend / maxClientSpend) * 100,
+      c.name === NO_CLIENT ? null : clientHue(c.name)))
+    .join('');
+
+  const oneRows = m.oneSpend
+    .slice().sort((a, b) => (a.spend_date ?? '').localeCompare(b.spend_date ?? ''))
+    .map(e => `
+      <li class="rep__row">
+        <span class="rep__time" dir="ltr">${esc((e.spend_date ?? '').slice(8, 10))}/${esc((e.spend_date ?? '').slice(5, 7))}</span>
+        <span class="rep__task">${esc(e.title)}</span>
+        <span class="rep__money" dir="ltr">${esc(money(e.amount))}</span>
+      </li>`).join('');
+
+  reportSheet.body.innerHTML = `
+    <div class="monthnav">
+      <button class="datenav__arrow" id="rPrev" type="button" aria-label="חודש קודם">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="monthnav__label">${esc(heMonth(reportMonth))}</span>
+      <button class="datenav__arrow" id="rNext" type="button" aria-label="חודש הבא" ${isNow ? 'disabled' : ''}>
+        <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+    <div class="rep__hero">
+      <div class="rep__ring" style="--pct:${m.pct}"><span>${m.pct}<small>%</small></span></div>
+      <div class="rep__kpis">
+        <div class="rep__kpi"><b>${m.done.length}</b><span>משימות הושלמו</span></div>
+        <div class="rep__kpi"><b>${m.totalMins ? esc(humanDuration(m.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
+        <div class="rep__kpi"><b dir="ltr">${esc(money(m.total))}</b><span>הוצאות עבודה</span></div>
+      </div>
+    </div>
+
+    <div class="moneyrow">
+      <div class="moneytile"><span>מנויים</span><b dir="ltr">${esc(money(m.subTotal))}</b></div>
+      <div class="moneytile"><span>חד־פעמי</span><b dir="ltr">${esc(money(m.oneTotal))}</b></div>
+      <div class="moneytile"><span>סה״כ</span><b dir="ltr">${esc(money(m.total))}</b></div>
+    </div>
+
+    ${subRows    ? `<h3 class="rep__h">מנויים שחויבו</h3>${subRows}` : ''}
+    ${oneRows    ? `<h3 class="rep__h">רכישות חד־פעמיות</h3><ul class="rep__list">${oneRows}</ul>` : ''}
+    ${clientRows ? `<h3 class="rep__h">לפי לקוח</h3>${clientRows}` : ''}
+    ${m.rows.length || m.spend.length ? '' : '<p class="rep__empty">אין נתונים לחודש הזה.</p>'}
+
+    <div class="btn-row rep__actions">
+      <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
+    </div>`;
+
+  $('#rPrev').addEventListener('click', () => { reportMonth = shiftMonth(reportMonth, -1); drawReport(); });
+  $('#rNext').addEventListener('click', () => {
+    if (reportMonth >= monthOf()) return;
+    reportMonth = shiftMonth(reportMonth, 1);
+    drawReport();
+  });
+  $('#repCopy')?.addEventListener('click', () => copyText(monthReportText(m)));
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('הדוח הועתק'); }
+  catch { toast('ההעתקה נכשלה'); }
+}
+
+function dayReportText(d, spend, spendTotal) {
   const lines = [
     `דוח משימות · ${heDayName(state.date)} ${heDate(state.date)}`,
     `הושלמו ${d.done.length} מתוך ${d.rows.length} (${d.pct}%)`,
   ];
   if (d.totalMins) lines.push(`זמן עבודה מתועד: ${humanDuration(d.totalMins)}`);
+  if (spendTotal)  lines.push(`הוצאות היום: ${money(spendTotal)}`);
   if (d.clients.length) {
     lines.push('', 'לפי לקוח:');
     d.clients.forEach(c => lines.push(`· ${c.name} — ${c.done}/${c.total}${c.mins ? ` (${humanDuration(c.mins)})` : ''}`));
@@ -1240,6 +1871,10 @@ function reportText(d) {
     lines.push('', 'מה נעשה:');
     d.timed.forEach(x => lines.push(`· ${hhmm(x.t.started_at)}–${hhmm(x.t.finished_at)} ${x.t.title} (${humanDuration(x.mins)})`));
   }
+  if (spend.length) {
+    lines.push('', 'הוצאות:');
+    spend.forEach(e => lines.push(`· ${e.title} — ${money(e.amount)}${e.kind === 'subscription' ? ' (מנוי)' : ''}`));
+  }
   if (d.open.length) {
     lines.push('', 'נשאר פתוח:');
     d.open.forEach(t => lines.push(`· ${t.title}`));
@@ -1247,9 +1882,36 @@ function reportText(d) {
   return lines.join('\n');
 }
 
+function monthReportText(m) {
+  const lines = [
+    `דוח חודשי · ${heMonth(reportMonth)}`,
+    `משימות: ${m.done.length} הושלמו מתוך ${m.rows.length} (${m.pct}%)`,
+  ];
+  if (m.totalMins) lines.push(`זמן עבודה מתועד: ${humanDuration(m.totalMins)}`);
+  lines.push('', `הוצאות עבודה: ${money(m.total)}`,
+             `· מנויים: ${money(m.subTotal)}`,
+             `· חד־פעמי: ${money(m.oneTotal)}`);
+  if (m.bySub.length) {
+    lines.push('', 'מנויים שחויבו:');
+    m.bySub.forEach(s => lines.push(`· ${s.name} — ${money(s.amount)}`));
+  }
+  if (m.oneSpend.length) {
+    lines.push('', 'רכישות חד־פעמיות:');
+    m.oneSpend.forEach(e => lines.push(`· ${e.spend_date} ${e.title} — ${money(e.amount)}`));
+  }
+  if (m.clients.length) {
+    lines.push('', 'לפי לקוח:');
+    m.clients.forEach(c => lines.push(
+      `· ${c.name} — ${c.done}/${c.total}${c.mins ? ` (${humanDuration(c.mins)})` : ''}${c.spend ? ` · הוצאות ${money(c.spend)}` : ''}`));
+  }
+  return lines.join('\n');
+}
+
 function closeReport() { reportSheet.root.hidden = true; }
 $$('[data-report-close]').forEach(b => b.addEventListener('click', closeReport));
 $('#reportBtn').addEventListener('click', openReport);
+$('#repDay').addEventListener('click',   () => { reportMode = 'day';   drawReport(); });
+$('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMonth = monthOf(state.date); drawReport(); });
 
 /* ============================================================
    CLOUD  (Supabase)
@@ -1275,6 +1937,46 @@ const toRow = t => ({
   created_at: t.created_at,
   updated_at: t.updated_at,
 });
+
+const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,position,created_at,updated_at';
+const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,created_at,updated_at';
+
+const subToRow = s => ({
+  id: s.id,
+  user_id: state.user.id,
+  name: s.name,
+  amount: s.amount,
+  billing_day: s.billing_day,
+  active: s.active,
+  started_on: s.started_on ?? null,
+  cancelled_on: s.cancelled_on ?? null,
+  note: s.note ?? null,
+  position: s.position ?? 0,
+  created_at: s.created_at,
+  updated_at: s.updated_at,
+});
+
+const expToRow = e => ({
+  id: e.id,
+  user_id: state.user.id,
+  spend_date: e.spend_date,
+  title: e.title,
+  amount: e.amount,
+  kind: e.kind,
+  subscription_id: e.subscription_id ?? null,
+  period: e.period ?? null,
+  client: e.client ?? null,
+  note: e.note ?? null,
+  created_at: e.created_at,
+  updated_at: e.updated_at,
+});
+
+/** Everything the sync layer needs to know about each table. */
+const TABLES = {
+  tasks:         { list: () => state.tasks,    row: toRow    },
+  subscriptions: { list: () => state.subs,     row: subToRow },
+  expenses:      { list: () => state.expenses, row: expToRow },
+};
 
 function setStatus(s, label) {
   state.status = s;
@@ -1319,13 +2021,16 @@ async function flush() {
   try {
     while (state.queue.length) {
       const op = state.queue[0];
+      const table = op.table ?? 'tasks';
+      const spec = TABLES[table];
+
       if (op.type === 'delete') {
-        const { error } = await state.sb.from('tasks').delete().eq('id', op.id);
+        const { error } = await state.sb.from(table).delete().eq('id', op.id);
         if (error) throw error;
-      } else {
-        const task = state.tasks.find(t => t.id === op.id);
-        if (task) {
-          const { error } = await state.sb.from('tasks').upsert(toRow(task));
+      } else if (spec) {
+        const row = spec.list().find(r => r.id === op.id);
+        if (row) {
+          const { error } = await state.sb.from(table).upsert(spec.row(row));
           if (error) throw error;
         }
       }
@@ -1368,6 +2073,24 @@ async function pull() {
       .order('task_date', { ascending: false }).limit(200);
     state.earlier = earlier ?? [];
 
+    /* --- subscriptions and expenses: both small, so fetch everything --- */
+    const [subsRes, expRes] = await Promise.all([
+      state.sb.from('subscriptions').select(SUB_COLS).order('position'),
+      state.sb.from('expenses').select(EXP_COLS).order('spend_date'),
+    ]);
+    if (subsRes.error) throw subsRes.error;
+    if (expRes.error)  throw expRes.error;
+
+    state.subs = [
+      ...state.subs.filter(s => pending.has(s.id)),
+      ...(subsRes.data ?? []).filter(s => !pending.has(s.id)).map(normalizeSub),
+    ];
+    state.expenses = [
+      ...state.expenses.filter(e => pending.has(e.id)),
+      ...(expRes.data ?? []).filter(e => !pending.has(e.id)).map(normalizeExp),
+    ];
+
+    ensureCharges();
     persist();
     setStatus('synced');
   } catch (err) {
@@ -1545,6 +2268,9 @@ document.addEventListener('keydown', e => {
   if (menuEl) closeMenu();
   else if (!doneSheet.root.hidden)   { closeDoneSheet(); render(); }
   else if (!clientSheet.root.hidden) closeClientSheet();
+  else if (!subSheet.root.hidden)    closeSubSheet();
+  else if (!expSheet.root.hidden)    closeExpSheet();
+  else if (!walletSheet.root.hidden) closeWallet();
   else if (!reportSheet.root.hidden) closeReport();
   else if (!sheet.root.hidden) closeSheet();
 });
@@ -1610,11 +2336,13 @@ setInterval(() => {
    ============================================================ */
 (async function boot() {
   setStatus('local');
+  ensureCharges();
   render();
   if (await connect()) {
     renderAccount();
     if (state.user) await sync();
     else setStatus('local');
   }
+  ensureCharges();
   render();
 })();
