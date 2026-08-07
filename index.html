@@ -37,7 +37,7 @@
             <span class="sync-chip__dot" aria-hidden="true"></span>
             <span class="sync-chip__text">מקומי</span>
           </button>
-          <button id="walletBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="מנויים והוצאות">
+          <button id="walletBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="הארנק — כסף שנכנס, מנויים והוצאות">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 8.5A2.5 2.5 0 016 6h11.5A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19H6a2.5 2.5 0 01-2.5-2.5v-8z" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="14.5" r="1.3" fill="currentColor"/></svg>
           </button>
           <button id="reportBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="דוח היום">
@@ -128,6 +128,14 @@
       <section class="section section--moved" id="movedSection" hidden aria-labelledby="movedHeading">
         <h2 class="section__title" id="movedHeading">הועברו ליום אחר</h2>
         <ul class="list list--moved" id="movedList"></ul>
+      </section>
+
+      <section class="section" id="incomeSection" aria-labelledby="incomeHeading">
+        <h2 class="section__title" id="incomeHeading">כסף שנכנס</h2>
+        <ul class="spend" id="incomeList"></ul>
+        <button class="spend__add" id="incomeAdd" type="button">
+          <span aria-hidden="true">+</span><span>רישום כסף שנכנס היום</span>
+        </button>
       </section>
 
       <section class="section" id="spendSection" aria-labelledby="spendHeading">
@@ -305,7 +313,7 @@
   <div class="sheet__scrim" data-wallet-close></div>
   <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="walletSheetTitle">
     <div class="sheet__head">
-      <h2 id="walletSheetTitle">מנויים והוצאות</h2>
+      <h2 id="walletSheetTitle">הארנק</h2>
       <button class="icon-btn" type="button" data-wallet-close aria-label="סגירה">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -343,6 +351,12 @@
         <label for="subStarted">מאיזה חודש את משלמת</label>
         <input id="subStarted" type="month" dir="ltr">
         <p class="field__hint">מכאן ואילך ייווצר תיעוד חיוב לכל חודש.</p>
+      </div>
+      <div class="field">
+        <label for="subPayer">מי משלם (השאירי ריק אם את)</label>
+        <input id="subPayer" type="text" maxlength="60" placeholder="למשל: אמא" autocomplete="off" list="subPayerList">
+        <datalist id="subPayerList"></datalist>
+        <p class="field__hint">מנוי שמישהו אחר משלם מתועד בארנק אבל לא נספר בהוצאות שלך.</p>
       </div>
       <label class="switch">
         <input id="subActive" type="checkbox" checked>
@@ -393,6 +407,45 @@
       <div class="btn-row">
         <button class="btn btn--primary" id="expSaveBtn" type="button">שמירה</button>
         <button class="btn btn--quiet" id="expDeleteBtn" type="button">מחיקה</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ INCOME EDITOR ═══════════ -->
+<div class="sheet" id="incSheet" hidden>
+  <div class="sheet__scrim" data-inc-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="incSheetTitle">
+    <div class="sheet__head">
+      <h2 id="incSheetTitle">תקבול חדש</h2>
+      <button class="icon-btn" type="button" data-inc-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <div class="field">
+        <label for="incClient">ממי נכנס</label>
+        <input id="incClient" type="text" maxlength="60" placeholder="שם הלקוח" autocomplete="off" list="incClientList">
+        <datalist id="incClientList"></datalist>
+      </div>
+      <div class="timepair">
+        <div class="field field--tight">
+          <label for="incAmount">סכום (₪)</label>
+          <input id="incAmount" type="number" dir="ltr" min="0" step="0.01" inputmode="decimal" placeholder="4000">
+        </div>
+        <div class="field field--tight">
+          <label for="incDate">תאריך</label>
+          <input id="incDate" type="date" dir="ltr">
+        </div>
+      </div>
+      <div class="field">
+        <label for="incTitle">על מה (לא חובה)</label>
+        <input id="incTitle" type="text" maxlength="200" placeholder="למשל: סרטון פרסומת" autocomplete="off">
+      </div>
+      <p class="sheet__msg" id="incMsg" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="incSaveBtn" type="button">שמירה</button>
+        <button class="btn btn--quiet" id="incDeleteBtn" type="button">מחיקה</button>
       </div>
     </div>
   </div>
