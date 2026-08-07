@@ -1744,9 +1744,10 @@ function donut(pct, size = 96) {
   return `<div class="donut" style="--size:${size}px">
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
       <circle cx="${mid}" cy="${mid}" r="${r}" fill="none" stroke="#E8E8EB" stroke-width="${stroke}"/>
+      ${on <= 0 ? '' /* ב-0% הקצה המעוגל היה מצייר נקודה ירוקה מיותרת */ : `
       <circle cx="${mid}" cy="${mid}" r="${r}" fill="none" stroke="#16A34A" stroke-width="${stroke}"
               stroke-linecap="round" stroke-dasharray="${on.toFixed(1)} ${(c - on).toFixed(1)}"
-              transform="rotate(-90 ${mid} ${mid})"/>
+              transform="rotate(-90 ${mid} ${mid})"/>`}
     </svg>
     <span class="donut__label">${pct}<small>%</small></span>
   </div>`;
