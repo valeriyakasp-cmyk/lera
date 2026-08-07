@@ -37,6 +37,9 @@
             <span class="sync-chip__dot" aria-hidden="true"></span>
             <span class="sync-chip__text">מקומי</span>
           </button>
+          <button id="bankBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="פיננסים — קופות ויתרות">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.2 21 8H3l9-4.8z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M5.5 11v6M10 11v6M14 11v6M18.5 11v6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M3 20h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
           <button id="walletBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="הארנק — כסף שנכנס, מנויים והוצאות">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 8.5A2.5 2.5 0 016 6h11.5A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19H6a2.5 2.5 0 01-2.5-2.5v-8z" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="14.5" r="1.3" fill="currentColor"/></svg>
           </button>
@@ -446,6 +449,88 @@
       <div class="btn-row">
         <button class="btn btn--primary" id="incSaveBtn" type="button">שמירה</button>
         <button class="btn btn--quiet" id="incDeleteBtn" type="button">מחיקה</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ FINANCES — pots ═══════════ -->
+<div class="sheet" id="bankSheet" hidden>
+  <div class="sheet__scrim" data-bank-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="bankSheetTitle">
+    <div class="sheet__head">
+      <h2 id="bankSheetTitle">פיננסים</h2>
+      <button class="icon-btn" type="button" data-bank-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body" id="bankBody"></div>
+  </div>
+</div>
+
+<!-- ═══════════ DEPOSIT / WITHDRAW ═══════════ -->
+<div class="sheet" id="moveSheet" hidden>
+  <div class="sheet__scrim" data-move-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="moveSheetTitle">
+    <div class="sheet__head">
+      <h2 id="moveSheetTitle">הפקדה</h2>
+      <button class="icon-btn" type="button" data-move-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <p class="sheet__hint" id="moveSheetPot"></p>
+      <div class="timepair">
+        <div class="field field--tight">
+          <label for="moveAmount">סכום (₪)</label>
+          <input id="moveAmount" type="number" dir="ltr" min="0" step="0.01" inputmode="decimal" placeholder="500">
+        </div>
+        <div class="field field--tight">
+          <label for="moveDate">תאריך</label>
+          <input id="moveDate" type="date" dir="ltr">
+        </div>
+      </div>
+      <div class="field">
+        <label for="moveTitle">על מה (לא חובה)</label>
+        <input id="moveTitle" type="text" maxlength="120" placeholder="למשל: העברה מהבנק" autocomplete="off">
+      </div>
+      <div class="field" id="moveTargetField" hidden>
+        <label for="moveTarget">לאיזו קופה</label>
+        <select id="moveTarget"></select>
+      </div>
+      <p class="sheet__msg" id="moveMsg" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="moveSaveBtn" type="button">אישור</button>
+        <button class="btn btn--quiet" type="button" data-move-close>ביטול</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ POT EDITOR ═══════════ -->
+<div class="sheet" id="potSheet" hidden>
+  <div class="sheet__scrim" data-pot-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="potSheetTitle">
+    <div class="sheet__head">
+      <h2 id="potSheetTitle">קופה חדשה</h2>
+      <button class="icon-btn" type="button" data-pot-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <div class="field">
+        <label for="potName">שם הקופה</label>
+        <input id="potName" type="text" maxlength="60" placeholder="למשל: חיסכון אישי" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="potShare">אחוז מכל הכנסה עתידית (%)</label>
+        <input id="potShare" type="number" dir="ltr" min="0" max="100" step="1" inputmode="numeric" placeholder="50">
+        <p class="field__hint" id="potShareHint"></p>
+      </div>
+      <p class="sheet__msg" id="potMsg" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="potSaveBtn" type="button">שמירה</button>
+        <button class="btn btn--quiet" id="potDeleteBtn" type="button">מחיקה</button>
       </div>
     </div>
   </div>
