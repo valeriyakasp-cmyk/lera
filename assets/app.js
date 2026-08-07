@@ -121,7 +121,7 @@ const normalize = t => ({
 
 /** Postgres `numeric` can arrive as a string — coerce so maths stays maths. */
 const normalizeSub = s => ({ ...s, amount: Number(s.amount) || 0, billing_day: Number(s.billing_day) || 1 });
-const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0 });
+const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0, pot_id: e.pot_id ?? null, settled_by: e.settled_by ?? null });
 const normalizeInc = i => ({ ...i, amount: Number(i.amount) || 0 });
 const normalizePot = p => ({ ...p, share: Number(p.share) || 0, position: Number(p.position) || 0 });
 const normalizeTxn = t => ({ ...t, amount: Number(t.amount) || 0 });
@@ -157,10 +157,15 @@ const persist = () => {
 };
 
 /* ---------- money ---------- */
-const money = n => '₪' + Number(n || 0).toLocaleString('he-IL', {
-  minimumFractionDigits: Number.isInteger(Number(n)) ? 0 : 2,
-  maximumFractionDigits: 2,
-});
+/** מינוס נכתב לפני השקל, אחרת הוא נדחק לצד הלא נכון בעברית. */
+const money = n => {
+  const v = Number(n) || 0;
+  const body = '₪' + Math.abs(v).toLocaleString('he-IL', {
+    minimumFractionDigits: Number.isInteger(Math.abs(v)) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+  return v < 0 ? '−' + body : body;
+};
 
 /** 'YYYY-MM' for an ISO date (or today). */
 const monthOf = (iso = isoDate()) => iso.slice(0, 7);
@@ -291,7 +296,7 @@ function deleteSubscription(id) {
   persist();
 }
 
-function addExpense({ title, amount, spend_date, client, kind, subscription_id, period, payer }) {
+function addExpense({ title, amount, spend_date, client, kind, subscription_id, period, payer, pot_id }) {
   const exp = {
     id: uid(),
     spend_date: spend_date ?? state.date,
@@ -303,6 +308,8 @@ function addExpense({ title, amount, spend_date, client, kind, subscription_id, 
     client: (client ?? '').trim() || null,
     note: null,
     payer: (payer ?? '').trim() || null,
+    pot_id: pot_id ?? null,
+    settled_by: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -319,6 +326,7 @@ function updateExpense(exp, patch) {
 }
 
 function deleteExpense(id) {
+  clearTxnsOf(id);
   state.expenses = state.expenses.filter(e => e.id !== id);
   queueOp({ type: 'delete', table: 'expenses', id });
   persist();
@@ -350,6 +358,10 @@ function updateIncome(inc, patch) {
 }
 
 function deleteIncome(id) {
+  clearTxnsOf(id);
+  state.expenses.forEach(e => {
+    if (e.settled_by === id) { e.settled_by = null; touchRow('expenses', e); }
+  });
   state.income = state.income.filter(i => i.id !== id);
   queueOp({ type: 'delete', table: 'income', id });
   persist();
@@ -448,6 +460,88 @@ function deleteTxn(id) {
 function clearTxnsOf(sourceId) {
   state.txns.filter(t => t.source_id === sourceId).forEach(t => deleteTxn(t.id));
 }
+
+/* ------------------------------------------------------------
+   קיזוז הוצאות
+   הוצאה נספרת בדיוק פעם אחת: או שירדה מקופה (תנועה שלילית),
+   או שקוזזה מהכנסה לפני החלוקה. שתי הדרכים לעולם לא יחד.
+   ------------------------------------------------------------ */
+
+/** האם ההוצאה כבר ירדה מקופה? */
+const paidFromPot = e => state.txns.some(t => t.source_id === e.id && t.kind === 'expense');
+
+/** הוצאה שעדיין לא ירדה משום מקום — היא מחכה לקיזוז מההכנסה הבאה. */
+const isUnsettled = e => isMine(e) && e.amount > 0 && !e.settled_by && !paidFromPot(e);
+
+/** הוצאות החודש שעדיין לא קוזזו, מהישנה לחדשה. */
+const unsettledIn = ym => state.expenses
+  .filter(e => (e.spend_date ?? '').slice(0, 7) === ym && isUnsettled(e))
+  .sort((a, b) => (a.spend_date ?? '').localeCompare(b.spend_date ?? ''));
+
+/** ההוצאה יורדת עכשיו מקופה — תנועה שלילית אמיתית ביומן. */
+function payFromPot(exp, potId) {
+  clearTxnsOf(exp.id);
+  if (exp.settled_by) { exp.settled_by = null; touchRow('expenses', exp); }
+  exp.pot_id = potId;
+  touchRow('expenses', exp);
+  addTxn({
+    pot_id: potId, amount: -exp.amount, happened_on: exp.spend_date,
+    kind: 'expense', title: exp.title, source_id: exp.id,
+  });
+}
+
+/** משחרר הוצאה מקיזוז, בין אם ירדה מקופה ובין אם קוזזה מהכנסה. */
+function unsettleExpense(exp) {
+  clearTxnsOf(exp.id);
+  if (exp.settled_by || exp.pot_id) {
+    exp.settled_by = null;
+    exp.pot_id = null;
+    touchRow('expenses', exp);
+  }
+}
+
+/**
+ * רושם את חלוקת ההכנסה: מסמן את ההוצאות שקוזזו ממנה,
+ * ומכניס לקופות רק את מה שנשאר. בטוח להרצה חוזרת.
+ */
+function applyIncomeSplit(inc, { settledIds = [], parts = null } = {}) {
+  clearTxnsOf(inc.id);
+  state.expenses.forEach(e => {
+    if (e.settled_by === inc.id && !settledIds.includes(e.id)) {
+      e.settled_by = null;
+      touchRow('expenses', e);
+    }
+  });
+
+  const settled = settledIds.map(id => state.expenses.find(e => e.id === id)).filter(Boolean);
+  settled.forEach(e => {
+    if (e.settled_by === inc.id) return;
+    clearTxnsOf(e.id);          // אם היא ירדה קודם מקופה — מבטלים, כדי לא לספור פעמיים
+    e.settled_by = inc.id;
+    e.pot_id = null;
+    touchRow('expenses', e);
+  });
+
+  const deducted = sum(settled, e => e.amount);
+  const net = Math.round((inc.amount - deducted) * 100) / 100;
+  if (net <= 0) return { deducted, net: Math.max(0, net) };
+
+  const list = parts ?? splitAmount(net);
+  list.forEach(({ pot, amount }) => {
+    if (!amount) return;
+    addTxn({
+      pot_id: pot.id, amount, happened_on: inc.received_on,
+      kind: 'split', title: inc.client ?? inc.title ?? 'תקבול', source_id: inc.id,
+    });
+  });
+  return { deducted, net };
+}
+
+/** כמה מהכנסה מסוימת באמת חולק, וכמה ירד ממנה בקיזוז. */
+const splitOf = inc => {
+  const deducted = sum(state.expenses.filter(e => e.settled_by === inc.id), e => e.amount);
+  return { deducted, net: sum(state.txns.filter(t => t.source_id === inc.id), t => t.amount) };
+};
 
 /**
  * מחלק סכום בין הקופות לפי האחוזים.
@@ -1813,7 +1907,8 @@ function renderWallet() {
           `<span class="exprow__date" dir="ltr">${esc((inc.received_on ?? '').slice(8, 10))}</span>` +
           `<span class="exprow__title">${esc(inc.client ?? 'תקבול')}${
             inc.title ? ` · <span class="exprow__sub">${esc(inc.title)}</span>` : ''
-          }</span>` +
+          }${(() => { const s = splitOf(inc); return s.deducted
+              ? `<span class="exprow__sub"> · חולקו ${esc(money(s.net))} אחרי קיזוז ${esc(money(s.deducted))}</span>` : ''; })()}</span>` +
           `<span class="exprow__amount" dir="ltr">${esc(money(inc.amount))}</span>`;
         r.addEventListener('click', () => openIncSheet(inc));
         return r;
@@ -1834,6 +1929,8 @@ function renderWallet() {
         r.innerHTML =
           `<span class="exprow__date" dir="ltr">${esc((exp.spend_date ?? '').slice(8, 10))}</span>` +
           `<span class="exprow__title">${esc(exp.title)}</span>` +
+          (isUnsettled(exp) ? '<span class="chip chip--wait">ממתין לקיזוז</span>' : '') +
+          (exp.pot_id ? `<span class="chip chip--pot" style="--pot:${esc(potById(exp.pot_id)?.colour ?? '#3D74A8')}">${esc(potById(exp.pot_id)?.name ?? '')}</span>` : '') +
           (exp.payer ? `<span class="chip chip--payer">${esc(exp.payer)}</span>` : '') +
           (exp.client ? `<span class="chip chip--client" style="--hue:${clientHue(exp.client)}">${esc(exp.client)}</span>` : '') +
           `<span class="exprow__amount" dir="ltr">${esc(money(exp.amount))}</span>`;
@@ -2201,6 +2298,151 @@ $$('[data-pot-close]').forEach(x => x.addEventListener('click', closePotSheet));
 
 const POT_COLOURS = ['#8B5CF6', '#2E86C1', '#0F8A57', '#E0900B', '#C2537A'];
 
+
+/* ============================================================
+   חלוקת ההכנסה
+   נפתח בכל פעם שנכנס כסף. מקזז קודם את הוצאות החודש שעדיין
+   לא ירדו משום מקום, ומחלק בין הקופות רק את מה שנשאר.
+   ============================================================ */
+const splitSheet = { root: $('#splitSheet'), body: $('#splitBody') };
+let splitIncome = null;
+let splitChecked = new Set();
+let splitParts = null;      // { potId: amount } כשהיא שינתה ידנית
+
+function openSplitSheet(inc) {
+  if (!splitSheet.root || !state.pots.length) return false;
+  splitIncome = inc;
+  splitChecked = new Set(unsettledIn(monthOf(inc.received_on)).map(e => e.id));
+  splitParts = null;
+  drawSplit();
+  splitSheet.root.hidden = false;
+  return true;
+}
+function closeSplitSheet() {
+  if (splitSheet.root) splitSheet.root.hidden = true;
+  splitIncome = null; splitParts = null;
+}
+
+/** הסכומים שיוצגו: מה ששינתה ידנית, אחרת החלוקה לפי האחוזים. */
+function currentParts(net) {
+  if (splitParts) return potsByPos().map(p => ({ pot: p, amount: splitParts[p.id] ?? 0 }));
+  return splitAmount(net);
+}
+
+function drawSplit() {
+  const inc = splitIncome;
+  if (!inc) return;
+  const month = monthOf(inc.received_on);
+
+  // ההוצאות שאפשר לקזז: אלו שעוד לא קוזזו, ואלו שכבר סומנו להכנסה הזאת
+  const options = state.expenses
+    .filter(e => (e.spend_date ?? '').slice(0, 7) === month && isMine(e) && e.amount > 0)
+    .filter(e => isUnsettled(e) || e.settled_by === inc.id)
+    .sort((a, b) => (a.spend_date ?? '').localeCompare(b.spend_date ?? ''));
+
+  const deducted = sum(options.filter(e => splitChecked.has(e.id)), e => e.amount);
+  const net = Math.round((inc.amount - deducted) * 100) / 100;
+  const parts = currentParts(Math.max(0, net));
+  const allocated = sum(parts, x => x.amount);
+  const drift = Math.round((net - allocated) * 100) / 100;
+
+  const expRows = options.map(e => `
+    <label class="settlerow">
+      <input type="checkbox" data-exp="${e.id}" ${splitChecked.has(e.id) ? 'checked' : ''}>
+      <span class="settlerow__box" aria-hidden="true"></span>
+      <span class="settlerow__date" dir="ltr">${esc((e.spend_date ?? '').slice(8, 10))}/${esc((e.spend_date ?? '').slice(5, 7))}</span>
+      <span class="settlerow__title">${esc(e.title)}</span>
+      <span class="settlerow__amount" dir="ltr">−${esc(money(e.amount))}</span>
+    </label>`).join('');
+
+  const potRows = parts.map(({ pot, amount }) => `
+    <div class="splitrow" style="--pot:${esc(pot.colour ?? '#3D74A8')}">
+      <span class="splitrow__dot" aria-hidden="true"></span>
+      <span class="splitrow__name">${esc(pot.name)}</span>
+      <span class="splitrow__pct">${pot.share}%</span>
+      <input class="splitrow__input" type="number" dir="ltr" min="0" step="0.01"
+             inputmode="decimal" data-pot="${pot.id}" value="${amount.toFixed(2)}">
+    </div>`).join('');
+
+  splitSheet.body.innerHTML = `
+    <div class="splithero">
+      <span>נכנס${inc.client ? ` מ${esc(inc.client)}` : ''}</span>
+      <b dir="ltr">${esc(money(inc.amount))}</b>
+    </div>
+
+    ${expRows ? `
+      <h3 class="rep__h">קודם יורדות ההוצאות</h3>
+      <p class="chart__cap">מסומן = יורד מההכנסה הזאת ולא נספר שוב בשום מקום.</p>
+      <div class="settlelist">${expRows}</div>` : ''}
+
+    <div class="splitnet">
+      <span>נשאר לחלוקה</span>
+      <b dir="ltr" class="${net < 0 ? 'is-neg' : ''}">${esc(money(net))}</b>
+    </div>
+    ${deducted ? `<p class="chart__cap splitnet__note">${esc(money(inc.amount))} פחות ${esc(money(deducted))} הוצאות</p>` : ''}
+
+    <h3 class="rep__h">בין הקופות</h3>
+    <div class="splitlist">${potRows}</div>
+
+    <p class="splitcheck" data-ok="${drift === 0}">
+      ${drift === 0
+        ? 'הסכומים מסתדרים בדיוק ✓'
+        : `${drift > 0 ? 'עוד' : 'יותר מדי'} ${esc(money(Math.abs(drift)))} — צריך להגיע ל-${esc(money(net))}`}
+    </p>
+
+    <div class="btn-row rep__actions">
+      <button class="btn btn--primary" id="splitConfirm" type="button" ${drift === 0 && net >= 0 ? '' : 'disabled'}>אישור החלוקה</button>
+      <button class="btn btn--quiet" id="splitReset" type="button">חזרה לאחוזים</button>
+    </div>`;
+
+  $$('[data-exp]', splitSheet.body).forEach(cb => cb.addEventListener('change', () => {
+    cb.checked ? splitChecked.add(cb.dataset.exp) : splitChecked.delete(cb.dataset.exp);
+    splitParts = null;                       // הסכום השתנה, אז חוזרים לאחוזים
+    drawSplit();
+  }));
+
+  $$('[data-pot]', splitSheet.body).forEach(inp => inp.addEventListener('input', () => {
+    splitParts = Object.fromEntries(
+      $$('[data-pot]', splitSheet.body).map(x => [x.dataset.pot, Number(x.value) || 0]));
+    const nowAllocated = sum(Object.values(splitParts), v => v);
+    const d = Math.round((net - nowAllocated) * 100) / 100;
+    const note = $('.splitcheck', splitSheet.body);
+    note.dataset.ok = String(d === 0);
+    note.textContent = d === 0
+      ? 'הסכומים מסתדרים בדיוק ✓'
+      : `${d > 0 ? 'עוד' : 'יותר מדי'} ${money(Math.abs(d))} — צריך להגיע ל-${money(net)}`;
+    $('#splitConfirm', splitSheet.body).disabled = !(d === 0 && net >= 0);
+  }));
+
+  $('#splitReset', splitSheet.body).addEventListener('click', () => { splitParts = null; drawSplit(); });
+
+  $('#splitConfirm', splitSheet.body).addEventListener('click', () => {
+    const chosen = splitParts
+      ? potsByPos().map(p => ({ pot: p, amount: splitParts[p.id] ?? 0 })).filter(x => x.amount)
+      : null;
+    const res = applyIncomeSplit(inc, { settledIds: [...splitChecked], parts: chosen });
+    closeSplitSheet();
+    if (bankSheet.root?.hidden === false) renderBank();
+    render();
+    burstConfetti();
+    toast(res.deducted
+      ? `חולקו ${money(res.net)} · קוזזו ${money(res.deducted)}`
+      : `חולקו ${money(res.net)} בין הקופות`);
+  });
+}
+
+$$('[data-split-close]').forEach(x => x.addEventListener('click', () => {
+  // סגירה בלי אישור — עדיין מחלקים לפי האחוזים, כדי שלא יישאר כסף לא משויך
+  const inc = splitIncome;
+  closeSplitSheet();
+  if (inc) {
+    applyIncomeSplit(inc, { settledIds: [] });
+    if (bankSheet.root?.hidden === false) renderBank();
+    render();
+    toast('חולק לפי האחוזים');
+  }
+}));
+
 $('#bankBtn')?.addEventListener('click', openBank);
 $$('[data-bank-close]').forEach(x => x.addEventListener('click', closeBank));
 
@@ -2291,6 +2533,7 @@ const expSheet = {
   date:    $('#expDate'),
   client:  $('#expClient'),
   clients: $('#expClientList'),
+  pot:     $('#expPot'),
   msg:     $('#expMsg'),
   save:    $('#expSaveBtn'),
   del:     $('#expDeleteBtn'),
@@ -2306,6 +2549,17 @@ function openExpSheet(exp, defaultDate) {
   expSheet.amount.value = exp ? exp.amount : '';
   expSheet.date.value   = exp?.spend_date ?? defaultDate ?? state.date;
   expSheet.client.value = exp?.client ?? '';
+  if (expSheet.pot) {
+    const settled = exp?.settled_by ? state.income.find(i => i.id === exp.settled_by) : null;
+    expSheet.pot.replaceChildren(
+      Object.assign(document.createElement('option'), {
+        value: '',
+        textContent: settled ? `קוזז מהתקבול של ${settled.client ?? 'תקבול'}` : 'לקזז מההכנסה הבאה',
+      }),
+      ...potsByPos().map(p => Object.assign(document.createElement('option'), { value: p.id, textContent: p.name })));
+    expSheet.pot.value = exp?.pot_id ?? '';
+    expSheet.pot.disabled = !state.pots.length;
+  }
   expSheet.del.hidden   = !exp;
   expSheet.msg.hidden   = true;
 
@@ -2325,11 +2579,16 @@ expSheet.save.addEventListener('click', () => {
   if (!(amount >= 0)) { expSheet.msg.textContent = 'הסכום צריך להיות מספר.'; expSheet.msg.dataset.tone = 'error'; expSheet.msg.hidden = false; return; }
 
   const patch = { title, amount, spend_date: expSheet.date.value || state.date, client: expSheet.client.value.trim() || null };
-  if (expTarget) updateExpense(expTarget, patch);
-  else addExpense(patch);
+  const exp = expTarget ? (updateExpense(expTarget, patch), expTarget) : addExpense(patch);
+
+  // הקופה קובעת מאיפה הכסף יורד. בלי קופה — ההוצאה ממתינה לקיזוז מההכנסה הבאה.
+  const wanted = expSheet.pot?.value || '';
+  if (wanted && potById(wanted)) payFromPot(exp, wanted);
+  else if (!wanted && exp.pot_id) unsettleExpense(exp);   // הסירה קופה — חוזרת להמתנה
 
   closeExpSheet();
-  if (!walletSheet.root.hidden) renderWallet();
+  if (walletSheet.root?.hidden === false) renderWallet();
+  if (bankSheet.root?.hidden === false) renderBank();
   render();
   toast('ההוצאה נשמרה');
 });
@@ -2337,6 +2596,7 @@ expSheet.save.addEventListener('click', () => {
 expSheet.del.addEventListener('click', () => {
   if (!expTarget) return closeExpSheet();
   deleteExpense(expTarget.id);
+  if (bankSheet.root?.hidden === false) renderBank();
   closeExpSheet();
   if (!walletSheet.root.hidden) renderWallet();
   render();
@@ -2389,13 +2649,14 @@ incSheet.save?.addEventListener('click', () => {
     amount,
     received_on: incSheet.date.value || state.date,
   };
-  if (incTarget) updateIncome(incTarget, patch);
-  else addIncome(patch);
+  const inc = incTarget ? (updateIncome(incTarget, patch), incTarget) : addIncome(patch);
 
   closeIncSheet();
   if (walletSheet.root?.hidden === false) renderWallet();
   render();
-  toast('התקבול נשמר');
+
+  // כל כניסת כסף עוברת דרך מסך החלוקה, כדי שתמיד יהיה ברור לאן הוא הלך
+  if (!openSplitSheet(inc)) toast('התקבול נשמר');
 });
 
 incSheet.del?.addEventListener('click', () => {
@@ -3070,7 +3331,7 @@ const toRow = t => ({
 });
 
 const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,payer,position,created_at,updated_at';
-const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,created_at,updated_at';
+const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,pot_id,settled_by,created_at,updated_at';
 const INC_COLS = 'id,received_on,client,title,amount,note,created_at,updated_at';
 const POT_COLS  = 'id,name,share,colour,position,created_at,updated_at';
 const TXN_COLS  = 'id,pot_id,happened_on,amount,kind,title,source_id,note,created_at,updated_at';
@@ -3104,6 +3365,8 @@ const expToRow = e => ({
   client: e.client ?? null,
   note: e.note ?? null,
   payer: e.payer ?? null,
+  pot_id: e.pot_id ?? null,
+  settled_by: e.settled_by ?? null,
   created_at: e.created_at,
   updated_at: e.updated_at,
 });
@@ -3481,6 +3744,7 @@ document.addEventListener('keydown', e => {
   else if (incSheet.root?.hidden    === false) closeIncSheet();
   else if (moveSheet.root?.hidden   === false) closeMoveSheet();
   else if (potSheet.root?.hidden    === false) closePotSheet();
+  else if (splitSheet.root?.hidden  === false) closeSplitSheet();
   else if (bankSheet.root?.hidden   === false) closeBank();
   else if (walletSheet.root?.hidden === false) closeWallet();
   else if (reportSheet.root?.hidden === false) closeReport();
