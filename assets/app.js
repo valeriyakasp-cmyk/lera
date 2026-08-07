@@ -1317,6 +1317,8 @@ const dateSheet = {
 let dateTarget = null;
 
 function openDateSheet(task) {
+  // אם ה-HTML שבדפדפן עדיין ישן (מטמון), נופלים חזרה להעברה למחר
+  if (!dateSheet.root) return doMove(task, shiftDate(task.task_date, 1));
   dateTarget = task;
   dateSheet.title.textContent = task.title;
   dateSheet.input.value = task.task_date;
@@ -1341,19 +1343,19 @@ function openDateSheet(task) {
   dateSheet.input.focus();
 }
 
-function closeDateSheet() { dateSheet.root.hidden = true; dateTarget = null; }
+function closeDateSheet() { if (dateSheet.root) dateSheet.root.hidden = true; dateTarget = null; }
 
 function commitDate() {
   const task = dateTarget;
-  const date = dateSheet.input.value;
+  const date = dateSheet.input?.value;
   if (!task || !date) return closeDateSheet();
   closeDateSheet();
   if (date === task.task_date) return;
   doMove(task, date);
 }
 
-dateSheet.save.addEventListener('click', commitDate);
-dateSheet.input.addEventListener('keydown', e => { if (e.key === 'Enter') commitDate(); });
+dateSheet.save?.addEventListener('click', commitDate);
+dateSheet.input?.addEventListener('keydown', e => { if (e.key === 'Enter') commitDate(); });
 $$('[data-date-close]').forEach(b => b.addEventListener('click', closeDateSheet));
 
 /* ============================================================
@@ -2608,14 +2610,15 @@ sheet.signOut.addEventListener('click', async () => {
 $$('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  // ה-?. שומר על האפליקציה גם אם ה-HTML בדפדפן ישן מהמטמון וחסר בו חלק
   if (menuEl) closeMenu();
-  else if (!doneSheet.root.hidden)   { closeDoneSheet(); render(); }
-  else if (!clientSheet.root.hidden) closeClientSheet();
-  else if (!dateSheet.root.hidden)   closeDateSheet();
-  else if (!subSheet.root.hidden)    closeSubSheet();
-  else if (!expSheet.root.hidden)    closeExpSheet();
-  else if (!walletSheet.root.hidden) closeWallet();
-  else if (!reportSheet.root.hidden) closeReport();
+  else if (doneSheet.root?.hidden   === false) { closeDoneSheet(); render(); }
+  else if (clientSheet.root?.hidden === false) closeClientSheet();
+  else if (dateSheet.root?.hidden   === false) closeDateSheet();
+  else if (subSheet.root?.hidden    === false) closeSubSheet();
+  else if (expSheet.root?.hidden    === false) closeExpSheet();
+  else if (walletSheet.root?.hidden === false) closeWallet();
+  else if (reportSheet.root?.hidden === false) closeReport();
   else if (!sheet.root.hidden) closeSheet();
 });
 
