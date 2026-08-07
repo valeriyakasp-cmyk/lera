@@ -1246,3 +1246,167 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .pdfdoc__brand { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 .pdfdoc__title { font-size: 13px; color: var(--ink-2); }
 .pdfdoc .rep__hero { background: var(--page); }
+
+/* ============================================================
+   FINANCES — pots, balances, goals
+   ============================================================ */
+.potgrid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2); margin-bottom: var(--s2);
+}
+.pottile {
+  display: flex; flex-direction: column; gap: var(--s1);
+  padding: var(--s3);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--sh-2);
+}
+.pottile__head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  min-width: 0;
+}
+.pottile__head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pottile__dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.pottile b {
+  font-size: 19px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.bank__total {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); padding: var(--s4);
+  border-radius: var(--r-md);
+  background: var(--surface); box-shadow: var(--sh-2);
+  margin-bottom: var(--s5);
+}
+.bank__total-label {
+  display: flex; align-items: center; gap: var(--s2);
+  font-size: 13.5px; font-weight: 600; color: var(--ink-2);
+}
+.bank__total-icon {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--r-xs);
+  background: var(--blue-100); color: var(--blue-900);
+}
+.bank__total-icon svg { width: 17px; height: 17px; }
+.bank__total b {
+  font-size: 24px; font-weight: 700; letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.potpills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s3); }
+.potpill {
+  height: 34px; padding-inline: var(--s4);
+  border-radius: 999px;
+  font-size: 13.5px; font-weight: 600; color: var(--ink-2);
+  background: var(--surface); box-shadow: var(--sh-1);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.potpill:hover { color: var(--ink); }
+.potpill.is-on { background: var(--pot); color: #fff; box-shadow: var(--sh-2); }
+
+.potcard {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+  padding: var(--s5) var(--s4) var(--s4);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--pot) 4%, #fff) 0%,
+                            color-mix(in srgb, var(--pot) 20%, #fff) 100%);
+  box-shadow: var(--sh-2);
+}
+.potcard__label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.potcard__amount {
+  font-size: clamp(34px, 8vw, 44px); font-weight: 700;
+  letter-spacing: -.035em; font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.potcard__actions { display: flex; gap: var(--s2); margin-top: var(--s2); }
+.btn--pot { background: var(--pot); color: #fff; }
+.btn--pot:hover { filter: brightness(1.06); }
+.potcard__actions .btn { min-width: 96px; }
+.potcard__actions .btn--quiet { background: rgba(255,255,255,.78); }
+.potcard__edit {
+  margin-top: var(--s2);
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  padding: 4px var(--s2); border-radius: 999px;
+}
+.potcard__edit:hover { background: rgba(255,255,255,.6); color: var(--ink); }
+
+/* משיכה — הכרטיס "נושם" פנימה לרגע */
+.potcard.is-out { animation: potOut .6s var(--ease); }
+@keyframes potOut {
+  35% { transform: translateY(4px) scale(.985); }
+ 100% { transform: none; }
+}
+
+/* מטבעות נופלים */
+.coins { position: fixed; inset: 0; pointer-events: none; z-index: 95; }
+.coins__bit {
+  position: fixed; width: 12px; height: 12px; border-radius: 999px;
+  background: radial-gradient(circle at 35% 30%, #FFE9A8, #E0A93B 65%, #B9832A);
+  box-shadow: 0 1px 3px rgba(26,26,26,.25);
+  animation: coinFall .95s cubic-bezier(.35,.05,.6,1) forwards;
+  opacity: 0;
+}
+@keyframes coinFall {
+    0% { transform: translate(0,0) scale(.6); opacity: 0; }
+   18% { opacity: 1; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(1) rotate(220deg); opacity: 0; }
+}
+
+.exprow__del {
+  flex: none; width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 999px; color: var(--ink-3); font-size: 18px; line-height: 1;
+}
+.exprow__del:hover { background: var(--card); color: var(--ink); }
+
+.goaladd { display: flex; gap: 6px; margin-bottom: var(--s3); }
+.goaladd input {
+  height: 42px; padding-inline: var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); font-size: 14.5px;
+}
+.goaladd input:first-child { flex: 1; min-width: 0; }
+.goaladd input:nth-child(2) { width: 86px; flex: none; }
+.goaladd__btn {
+  width: 42px; height: 42px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--surface); border: 1px solid var(--line);
+  font-size: 20px; color: var(--blue-900);
+}
+.goaladd__btn:hover { background: var(--blue-100); }
+
+.goalrow {
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line-soft);
+}
+.goalrow:first-child { border-top: 0; }
+.goalrow__head { display: flex; align-items: center; gap: var(--s2); margin-bottom: 6px; }
+.goalrow__title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.goalrow__target { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.goalrow__foot {
+  display: flex; justify-content: space-between;
+  margin-top: 5px; font-size: 12px; color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.goalrow.is-done .goalrow__foot { color: var(--green-ink); font-weight: 600; }
+
+@media (max-width: 460px) {
+  /* רצועה נגללת — עדיף על שבירה לשתי שורות עם חור */
+  .potgrid {
+    display: flex; gap: var(--s2);
+    overflow-x: auto; scroll-snap-type: x mandatory;
+    margin-inline: calc(var(--s4) * -1); padding-inline: var(--s4);
+    scrollbar-width: none;
+  }
+  .potgrid::-webkit-scrollbar { display: none; }
+  .pottile { flex: 0 0 auto; min-width: 132px; scroll-snap-align: start; }
+  .pottile b { font-size: 17px; }
+  .potcard__actions { flex-wrap: wrap; justify-content: center; }
+  .potcard__actions .btn { min-width: 84px; }
+}

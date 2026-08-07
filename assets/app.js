@@ -13,6 +13,9 @@ const LS = {
   subs:     'subs.v1',
   expenses: 'expenses.v1',
   income:   'income.v1',
+  pots:     'pots.v1',
+  txns:     'txns.v1',
+  goals:    'goals.v1',
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -120,6 +123,9 @@ const normalize = t => ({
 const normalizeSub = s => ({ ...s, amount: Number(s.amount) || 0, billing_day: Number(s.billing_day) || 1 });
 const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0 });
 const normalizeInc = i => ({ ...i, amount: Number(i.amount) || 0 });
+const normalizePot = p => ({ ...p, share: Number(p.share) || 0, position: Number(p.position) || 0 });
+const normalizeTxn = t => ({ ...t, amount: Number(t.amount) || 0 });
+const normalizeGoal = g => ({ ...g, target: Number(g.target) || 0, position: Number(g.position) || 0 });
 
 const state = {
   date:     isoDate(),
@@ -127,6 +133,9 @@ const state = {
   subs:     read(LS.subs, []),
   expenses: read(LS.expenses, []),
   income:   read(LS.income, []),
+  pots:     read(LS.pots, []),
+  txns:     read(LS.txns, []),
+  goals:    read(LS.goals, []),
   queue:    read(LS.queue, []),
   cfg:      read(LS.cfg, { url: '', key: '' }),
   ui:       read(LS.ui, { doneOpen: true }),
@@ -141,6 +150,9 @@ const persist = () => {
   write(LS.subs, state.subs);
   write(LS.expenses, state.expenses);
   write(LS.income, state.income);
+  write(LS.pots, state.pots);
+  write(LS.txns, state.txns);
+  write(LS.goals, state.goals);
   write(LS.queue, state.queue);
 };
 
@@ -353,6 +365,146 @@ const incomeIn = ym   => state.income.filter(i => (i.received_on ?? '').slice(0,
  */
 const isMine   = e => !e.payer;
 const myOutlay = list => sum(list.filter(isMine), e => e.amount);
+
+/* ============================================================
+   קופות — עובר ושב מחולק
+   היתרה של קופה היא תמיד סכום התנועות שלה, אף פעם לא מספר שמור.
+   ככה אי אפשר שהיתרה והתנועות יסתרו זו את זו.
+   ============================================================ */
+
+// שלושת הגוונים עברו את בדיקת עיוורון הצבעים, ולכל קופה גם שם כתוב לידה
+const DEFAULT_POTS = [
+  { name: 'חיסכון אישי', share: 50, colour: '#8B5CF6' },
+  { name: 'קופה עסקית',  share: 25, colour: '#2E86C1' },
+  { name: 'בזבוזים',     share: 25, colour: '#0F8A57' },
+];
+
+const potsByPos  = ()   => state.pots.slice().sort((a, b) => a.position - b.position);
+const potById    = id   => state.pots.find(p => p.id === id) ?? null;
+const txnsOfPot  = id   => state.txns.filter(t => t.pot_id === id);
+const potBalance = id   => sum(txnsOfPot(id), t => t.amount);
+const accountTotal = () => sum(state.txns, t => t.amount);
+const businessPot  = () => state.pots.find(p => p.name === 'קופה עסקית') ?? potsByPos()[0] ?? null;
+const funPot       = () => state.pots.find(p => p.name === 'בזבוזים')   ?? potsByPos()[0] ?? null;
+
+function addPot({ name, share, colour, position }) {
+  const pot = {
+    id: uid(),
+    name: (name ?? '').trim(),
+    share: Number(share) || 0,
+    colour: colour ?? null,
+    position: position ?? state.pots.length,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.pots.push(pot);
+  touchRow('pots', pot);
+  return pot;
+}
+
+function updatePot(pot, patch) { Object.assign(pot, patch); touchRow('pots', pot); }
+
+/** מוחקים קופה — התנועות שלה עוברות לקופה אחרת, כדי שהסך הכולל לא ישתנה. */
+function deletePot(id, moveTo = null) {
+  const target = moveTo ?? potsByPos().find(p => p.id !== id)?.id ?? null;
+  state.txns.forEach(t => {
+    if (t.pot_id !== id) return;
+    if (target) { t.pot_id = target; touchRow('pot_txns', t); }
+  });
+  if (!target) {
+    state.txns = state.txns.filter(t => t.pot_id !== id);
+  }
+  state.goals.forEach(g => { if (g.pot_id === id) { g.pot_id = target; touchRow('goals', g); } });
+  state.pots = state.pots.filter(p => p.id !== id);
+  queueOp({ type: 'delete', table: 'pots', id });
+  persist();
+}
+
+function addTxn({ pot_id, amount, happened_on, kind, title, source_id, note }) {
+  const t = {
+    id: uid(),
+    pot_id,
+    happened_on: happened_on ?? state.date,
+    amount: Math.round((Number(amount) || 0) * 100) / 100,
+    kind: kind ?? 'manual',
+    title: (title ?? '').trim() || null,
+    source_id: source_id ?? null,
+    note: note ?? null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.txns.push(t);
+  touchRow('pot_txns', t);
+  return t;
+}
+
+function deleteTxn(id) {
+  state.txns = state.txns.filter(t => t.id !== id);
+  queueOp({ type: 'delete', table: 'pot_txns', id });
+  persist();
+}
+
+/** מוחק את כל התנועות שנוצרו אוטומטית ממקור מסוים (הכנסה או הוצאה). */
+function clearTxnsOf(sourceId) {
+  state.txns.filter(t => t.source_id === sourceId).forEach(t => deleteTxn(t.id));
+}
+
+/**
+ * מחלק סכום בין הקופות לפי האחוזים.
+ * השארית מהעיגול הולכת לקופה הגדולה ביותר, כדי שסכום החלקים
+ * יהיה תמיד בדיוק הסכום המקורי ולא אגורה פחות.
+ */
+function splitAmount(total) {
+  const pots = potsByPos().filter(p => p.share > 0);
+  if (!pots.length) return [];
+  const shareSum = sum(pots, p => p.share) || 100;
+  const cents = Math.round((Number(total) || 0) * 100);
+
+  const parts = pots.map(p => ({ pot: p, cents: Math.floor(cents * p.share / shareSum) }));
+  const drift = cents - sum(parts, x => x.cents);
+  if (drift) {
+    const biggest = parts.reduce((a, b) => (b.pot.share > a.pot.share ? b : a), parts[0]);
+    biggest.cents += drift;
+  }
+  return parts.map(x => ({ pot: x.pot, amount: x.cents / 100 })).filter(x => x.amount !== 0);
+}
+
+/**
+ * יתרת פתיחה — מכניס לכל קופה את הסכום שנקבע לה, פעם אחת.
+ * מזוהה לפי kind='opening', כך שהרצה חוזרת לא תכפיל אותה.
+ */
+function seedOpening(allocations, on = isoDate()) {
+  state.txns.filter(t => t.kind === 'opening').forEach(t => deleteTxn(t.id));
+  allocations.forEach(({ pot_id, amount }) => {
+    if (!amount) return;
+    addTxn({ pot_id, amount, happened_on: on, kind: 'opening', title: 'יתרת פתיחה' });
+  });
+}
+
+/* ---------- יעדי חיסכון ---------- */
+function addGoal({ pot_id, title, target }) {
+  const g = {
+    id: uid(),
+    pot_id: pot_id ?? null,
+    title: (title ?? '').trim(),
+    target: Number(target) || 0,
+    done: false,
+    position: state.goals.length,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.goals.push(g);
+  touchRow('goals', g);
+  return g;
+}
+function updateGoal(g, patch) { Object.assign(g, patch); touchRow('goals', g); }
+function deleteGoal(id) {
+  state.goals = state.goals.filter(g => g.id !== id);
+  queueOp({ type: 'delete', table: 'goals', id });
+  persist();
+}
+const goalsOfPot = id => state.goals.filter(g => g.pot_id === id)
+                                    .sort((a, b) => a.position - b.position);
 
 /**
  * Write the missing monthly charges for every subscription, from the
@@ -1703,6 +1855,355 @@ function renderWallet() {
   $('#wAddExp', b).addEventListener('click', () => openExpSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
 }
 
+
+/* ============================================================
+   פיננסים — עובר ושב מחולק לקופות
+   ============================================================ */
+const bankSheet = { root: $('#bankSheet'), body: $('#bankBody') };
+let bankPotId = null;
+
+function openBank() {
+  if (!bankSheet.root) return;
+  if (!state.pots.length) DEFAULT_POTS.forEach((d, i) => addPot({ ...d, position: i }));
+  if (!potById(bankPotId)) bankPotId = potsByPos()[0]?.id ?? null;
+  renderBank();
+  bankSheet.root.hidden = false;
+}
+function closeBank() { if (bankSheet.root) bankSheet.root.hidden = true; }
+
+/** מספר שמתגלגל מערך לערך — נעים לעין וגם מראה לאן הכסף זז. */
+function rollNumber(node, from, to, ms = 700) {
+  if (!node) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { node.textContent = money(to); return; }
+  const t0 = performance.now();
+  const ease = x => 1 - Math.pow(1 - x, 3);
+  (function step(now) {
+    const k = Math.min(1, (now - t0) / ms);
+    node.textContent = money(from + (to - from) * ease(k));
+    if (k < 1) requestAnimationFrame(step);
+    else node.textContent = money(to);
+  })(t0);
+}
+
+/** משיכה — מטבעות נופלים מהכרטיס כלפי מטה. שקט יותר מקונפטי, וברור שיצא כסף. */
+function coinDrop(anchor) {
+  if (!anchor || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const box = anchor.getBoundingClientRect();
+  const layer = document.createElement('div');
+  layer.className = 'coins';
+  document.body.append(layer);
+
+  for (let i = 0; i < 14; i++) {
+    const c = document.createElement('span');
+    c.className = 'coins__bit';
+    c.style.left = `${box.left + box.width * (.2 + Math.random() * .6)}px`;
+    c.style.top  = `${box.top + box.height * .55}px`;
+    c.style.setProperty('--dx', `${(Math.random() - .5) * 90}px`);
+    c.style.setProperty('--dy', `${90 + Math.random() * 90}px`);
+    c.style.animationDelay = `${Math.random() * 160}ms`;
+    layer.append(c);
+  }
+  setTimeout(() => layer.remove(), 1400);
+}
+
+function renderBank() {
+  const pots = potsByPos();
+  const total = accountTotal();
+  const active = potById(bankPotId) ?? pots[0] ?? null;
+  bankPotId = active?.id ?? null;
+  const b = bankSheet.body;
+
+  const tiles = pots.map(p => `
+    <div class="pottile">
+      <span class="pottile__head">
+        <i class="pottile__dot" style="background:${esc(p.colour ?? '#3D74A8')}"></i>
+        <span>${esc(p.name)}</span>
+      </span>
+      <b dir="ltr" style="color:${esc(p.colour ?? '#3D74A8')}">${esc(money(potBalance(p.id)))}</b>
+    </div>`).join('');
+
+  const pills = pots.map(p => `
+    <button class="potpill${p.id === bankPotId ? ' is-on' : ''}" type="button" data-pot="${p.id}"
+            style="--pot:${esc(p.colour ?? '#3D74A8')}">${esc(p.name)}</button>`).join('');
+
+  b.innerHTML = `
+    <div class="potgrid">${tiles || '<p class="wallet__empty">אין קופות עדיין.</p>'}</div>
+
+    <div class="bank__total">
+      <span class="bank__total-label">
+        <i class="bank__total-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3.5 8.5A2.5 2.5 0 016 6h11.5A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19H6a2.5 2.5 0 01-2.5-2.5v-8z" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/></svg>
+        </i>
+        סה״כ בעו״ש
+      </span>
+      <b dir="ltr" id="bankTotal">${esc(money(total))}</b>
+    </div>
+
+    ${pots.length ? `<div class="potpills">${pills}</div>` : ''}
+
+    ${active ? `
+      <div class="potcard" id="potCard" style="--pot:${esc(active.colour ?? '#3D74A8')}">
+        <span class="potcard__label">יתרה · ${esc(active.name)}</span>
+        <b class="potcard__amount" dir="ltr" id="potAmount">${esc(money(potBalance(active.id)))}</b>
+        <div class="potcard__actions">
+          <button class="btn btn--pot" id="potDeposit" type="button">הפקדה</button>
+          <button class="btn btn--quiet" id="potWithdraw" type="button">משיכה</button>
+          <button class="btn btn--quiet" id="potTransfer" type="button">העברה</button>
+        </div>
+        <button class="potcard__edit" id="potEdit" type="button">${active.share}% מכל הכנסה · עריכה</button>
+      </div>
+
+      <h3 class="rep__h">תנועות</h3>
+      <div id="potTxns"></div>
+
+      <h3 class="rep__h">יעדים</h3>
+      <form class="goaladd" id="goalAdd">
+        <input id="goalTitle" type="text" maxlength="120" placeholder="יעד חדש" autocomplete="off">
+        <input id="goalTarget" type="number" dir="ltr" min="0" step="1" inputmode="decimal" placeholder="₪">
+        <button class="goaladd__btn" type="submit" aria-label="הוספת יעד">+</button>
+      </form>
+      <div id="potGoals"></div>` : ''}
+
+    <button class="spend__add" id="potAdd" type="button"><span aria-hidden="true">+</span><span>הוספת קופה</span></button>`;
+
+  $$('.potpill', b).forEach(x => x.addEventListener('click', () => { bankPotId = x.dataset.pot; renderBank(); }));
+  $('#potAdd', b).addEventListener('click', () => openPotSheet(null));
+  if (!active) return;
+
+  $('#potEdit', b).addEventListener('click', () => openPotSheet(active));
+  $('#potDeposit', b).addEventListener('click', () => openMoveSheet(active, 'deposit'));
+  $('#potWithdraw', b).addEventListener('click', () => openMoveSheet(active, 'withdraw'));
+  $('#potTransfer', b).addEventListener('click', () => openMoveSheet(active, 'transfer'));
+
+  /* ---- transactions ---- */
+  const rows = txnsOfPot(active.id)
+    .slice()
+    .sort((x, y) => (y.happened_on ?? '').localeCompare(x.happened_on ?? '') ||
+                    (y.created_at ?? '').localeCompare(x.created_at ?? ''));
+  const box = $('#potTxns', b);
+  if (rows.length) {
+    box.replaceChildren(...rows.map(t => {
+      const r = document.createElement('div');
+      r.className = 'exprow' + (t.amount >= 0 ? ' is-income' : '');
+      r.innerHTML =
+        `<span class="exprow__date" dir="ltr">${esc((t.happened_on ?? '').slice(8, 10))}/${esc((t.happened_on ?? '').slice(5, 7))}</span>` +
+        `<span class="exprow__title">${esc(t.title ?? TXN_LABEL[t.kind] ?? 'תנועה')}</span>` +
+        `<span class="exprow__amount" dir="ltr">${t.amount >= 0 ? '+' : '−'}${esc(money(Math.abs(t.amount)))}</span>`;
+      if (t.kind === 'deposit' || t.kind === 'withdraw' || t.kind === 'transfer' || t.kind === 'manual') {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'exprow__del';
+        del.setAttribute('aria-label', 'מחיקת התנועה');
+        del.textContent = '×';
+        del.addEventListener('click', e => {
+          e.stopPropagation();
+          deleteTxn(t.id);
+          renderBank();
+          toast('התנועה נמחקה');
+        });
+        r.append(del);
+      }
+      return r;
+    }));
+  } else {
+    box.innerHTML = '<p class="wallet__empty">אין תנועות</p>';
+  }
+
+  /* ---- goals ---- */
+  const bal = potBalance(active.id);
+  const gs = goalsOfPot(active.id);
+  const gbox = $('#potGoals', b);
+  if (gs.length) {
+    gbox.replaceChildren(...gs.map(g => {
+      const pct = g.target > 0 ? Math.min(100, Math.max(0, bal / g.target * 100)) : 0;
+      const row = document.createElement('div');
+      row.className = 'goalrow' + (pct >= 100 ? ' is-done' : '');
+      row.innerHTML = `
+        <div class="goalrow__head">
+          <span class="goalrow__title">${esc(g.title)}</span>
+          <span class="goalrow__target" dir="ltr">${esc(money(g.target))}</span>
+          <button class="exprow__del" type="button" aria-label="מחיקת היעד">×</button>
+        </div>
+        <div class="rep__track"><i style="width:${Math.round(pct)}%;background:${esc(active.colour ?? '#3D74A8')}"></i></div>
+        <div class="goalrow__foot">
+          <span>${pct >= 100 ? 'הגעת ליעד' : 'ממשיכים לחסוך'}</span>
+          <span dir="ltr">${Math.round(pct)}%</span>
+        </div>`;
+      row.querySelector('.exprow__del').addEventListener('click', () => {
+        deleteGoal(g.id); renderBank(); toast('היעד נמחק');
+      });
+      return row;
+    }));
+  } else {
+    gbox.innerHTML = '<p class="wallet__empty">אין יעדים</p>';
+  }
+
+  $('#goalAdd', b).addEventListener('submit', e => {
+    e.preventDefault();
+    const title = $('#goalTitle', b).value.trim();
+    const target = Number($('#goalTarget', b).value);
+    if (!title || !(target > 0)) return;
+    addGoal({ pot_id: active.id, title, target });
+    renderBank();
+    toast('היעד נוסף');
+  });
+}
+
+const TXN_LABEL = {
+  opening: 'יתרת פתיחה', split: 'חלוקת הכנסה', expense: 'הוצאה',
+  deposit: 'הפקדה', withdraw: 'משיכה', transfer: 'העברה', manual: 'תנועה',
+};
+
+/* ---------- deposit / withdraw / transfer ---------- */
+const moveSheet = {
+  root:   $('#moveSheet'),
+  title:  $('#moveSheetTitle'),
+  pot:    $('#moveSheetPot'),
+  amount: $('#moveAmount'),
+  date:   $('#moveDate'),
+  name:   $('#moveTitle'),
+  targetField: $('#moveTargetField'),
+  target: $('#moveTarget'),
+  msg:    $('#moveMsg'),
+  save:   $('#moveSaveBtn'),
+};
+let moveTarget = null;      // { pot, mode }
+
+function openMoveSheet(pot, mode) {
+  if (!moveSheet.root) return;
+  moveTarget = { pot, mode };
+  const heads = { deposit: 'הפקדה', withdraw: 'משיכה', transfer: 'העברה בין קופות' };
+  moveSheet.title.textContent = heads[mode];
+  moveSheet.pot.textContent = mode === 'transfer'
+    ? `מ${pot.name} · יתרה ${money(potBalance(pot.id))}`
+    : `${pot.name} · יתרה ${money(potBalance(pot.id))}`;
+  moveSheet.amount.value = '';
+  moveSheet.name.value = '';
+  moveSheet.date.value = isoDate();
+  moveSheet.msg.hidden = true;
+
+  const others = potsByPos().filter(p => p.id !== pot.id);
+  moveSheet.targetField.hidden = mode !== 'transfer';
+  if (mode === 'transfer') {
+    moveSheet.target.replaceChildren(
+      ...others.map(p => Object.assign(document.createElement('option'), { value: p.id, textContent: p.name })));
+  }
+  moveSheet.save.textContent = heads[mode];
+  moveSheet.root.hidden = false;
+  moveSheet.amount.focus();
+}
+function closeMoveSheet() { if (moveSheet.root) moveSheet.root.hidden = true; moveTarget = null; }
+
+moveSheet.save?.addEventListener('click', () => {
+  if (!moveTarget) return closeMoveSheet();
+  const { pot, mode } = moveTarget;
+  const amount = Number(moveSheet.amount.value);
+  const fail = m => { moveSheet.msg.textContent = m; moveSheet.msg.dataset.tone = 'error'; moveSheet.msg.hidden = false; };
+  if (!(amount > 0)) return fail('הסכום צריך להיות מספר גדול מאפס.');
+
+  const on = moveSheet.date.value || isoDate();
+  const title = moveSheet.name.value.trim() || null;
+  const before = potBalance(pot.id);
+
+  if (mode === 'transfer') {
+    const to = potById(moveSheet.target.value);
+    if (!to) return fail('בחרי קופה לקבל את הכסף.');
+    if (amount > before) return fail(`ב${pot.name} יש רק ${money(before)}.`);
+    addTxn({ pot_id: pot.id, amount: -amount, happened_on: on, kind: 'transfer', title: title ?? `העברה ל${to.name}` });
+    addTxn({ pot_id: to.id,  amount:  amount, happened_on: on, kind: 'transfer', title: title ?? `העברה מ${pot.name}` });
+  } else {
+    const signed = mode === 'deposit' ? amount : -amount;
+    if (mode === 'withdraw' && amount > before) return fail(`ב${pot.name} יש רק ${money(before)}.`);
+    addTxn({ pot_id: pot.id, amount: signed, happened_on: on, kind: mode, title });
+  }
+
+  closeMoveSheet();
+  renderBank();
+
+  // אחרי הציור מחדש הכרטיס הוא אלמנט חדש, אז מרימים את האנימציה עכשיו
+  const amountNode = $('#potAmount');
+  const card = $('#potCard');
+  const after = potBalance(pot.id);
+  if (amountNode) rollNumber(amountNode, before, after);
+
+  if (mode === 'deposit') { burstConfetti(); toast(`הופקדו ${money(amount)} ל${pot.name}`); }
+  else if (mode === 'withdraw') { coinDrop(card); card?.classList.add('is-out'); toast(`נמשכו ${money(amount)} מ${pot.name}`); }
+  else { toast(`הועברו ${money(amount)}`); }
+
+  render();
+});
+$$('[data-move-close]').forEach(x => x.addEventListener('click', closeMoveSheet));
+
+/* ---------- pot editor ---------- */
+const potSheet = {
+  root:  $('#potSheet'),
+  title: $('#potSheetTitle'),
+  name:  $('#potName'),
+  share: $('#potShare'),
+  hint:  $('#potShareHint'),
+  msg:   $('#potMsg'),
+  save:  $('#potSaveBtn'),
+  del:   $('#potDeleteBtn'),
+};
+let potEditing = null;
+
+function openPotSheet(pot) {
+  if (!potSheet.root) return;
+  potEditing = pot;
+  potSheet.title.textContent = pot ? 'עריכת קופה' : 'קופה חדשה';
+  potSheet.name.value  = pot?.name ?? '';
+  potSheet.share.value = pot ? pot.share : '';
+  potSheet.del.hidden  = !pot || state.pots.length < 2;
+  potSheet.msg.hidden  = true;
+  updateShareHint();
+  potSheet.root.hidden = false;
+  potSheet.name.focus();
+}
+function closePotSheet() { if (potSheet.root) potSheet.root.hidden = true; potEditing = null; }
+
+function updateShareHint() {
+  if (!potSheet.hint) return;
+  const others = sum(state.pots.filter(p => p.id !== potEditing?.id), p => p.share);
+  const mine = Number(potSheet.share.value) || 0;
+  const total = others + mine;
+  potSheet.hint.textContent = total === 100
+    ? 'סך האחוזים בכל הקופות: 100% ✓'
+    : `סך האחוזים בכל הקופות: ${total}% — צריך להגיע ל-100%`;
+}
+potSheet.share?.addEventListener('input', updateShareHint);
+
+potSheet.save?.addEventListener('click', () => {
+  const name = potSheet.name.value.trim();
+  const share = Number(potSheet.share.value) || 0;
+  const fail = m => { potSheet.msg.textContent = m; potSheet.msg.dataset.tone = 'error'; potSheet.msg.hidden = false; };
+  if (!name) return fail('צריך שם לקופה.');
+  if (share < 0 || share > 100) return fail('האחוז צריך להיות בין 0 ל-100.');
+
+  if (potEditing) updatePot(potEditing, { name, share });
+  else bankPotId = addPot({ name, share, colour: POT_COLOURS[state.pots.length % POT_COLOURS.length] }).id;
+
+  closePotSheet();
+  renderBank();
+  toast(potEditing ? 'הקופה עודכנה' : 'הקופה נוספה');
+});
+
+potSheet.del?.addEventListener('click', () => {
+  if (!potEditing) return closePotSheet();
+  const name = potEditing.name;
+  const other = potsByPos().find(p => p.id !== potEditing.id);
+  deletePot(potEditing.id);
+  bankPotId = other?.id ?? null;
+  closePotSheet();
+  renderBank();
+  toast(`${name} נמחקה — הכסף עבר ל${other?.name ?? 'קופה אחרת'}`);
+});
+$$('[data-pot-close]').forEach(x => x.addEventListener('click', closePotSheet));
+
+const POT_COLOURS = ['#8B5CF6', '#2E86C1', '#0F8A57', '#E0900B', '#C2537A'];
+
+$('#bankBtn')?.addEventListener('click', openBank);
+$$('[data-bank-close]').forEach(x => x.addEventListener('click', closeBank));
+
 $('#walletBtn').addEventListener('click', openWallet);
 $$('[data-wallet-close]').forEach(x => x.addEventListener('click', closeWallet));
 
@@ -2571,6 +3072,9 @@ const toRow = t => ({
 const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,payer,position,created_at,updated_at';
 const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,created_at,updated_at';
 const INC_COLS = 'id,received_on,client,title,amount,note,created_at,updated_at';
+const POT_COLS  = 'id,name,share,colour,position,created_at,updated_at';
+const TXN_COLS  = 'id,pot_id,happened_on,amount,kind,title,source_id,note,created_at,updated_at';
+const GOAL_COLS = 'id,pot_id,title,target,done,position,created_at,updated_at';
 
 const subToRow = s => ({
   id: s.id,
@@ -2616,12 +3120,36 @@ const incToRow = i => ({
   updated_at: i.updated_at,
 });
 
+const potToRow = p => ({
+  id: p.id, user_id: state.user.id,
+  name: p.name, share: p.share, colour: p.colour ?? null,
+  position: p.position ?? 0,
+  created_at: p.created_at, updated_at: p.updated_at,
+});
+
+const txnToRow = t => ({
+  id: t.id, user_id: state.user.id,
+  pot_id: t.pot_id, happened_on: t.happened_on, amount: t.amount,
+  kind: t.kind, title: t.title ?? null, source_id: t.source_id ?? null, note: t.note ?? null,
+  created_at: t.created_at, updated_at: t.updated_at,
+});
+
+const goalToRow = g => ({
+  id: g.id, user_id: state.user.id,
+  pot_id: g.pot_id ?? null, title: g.title, target: g.target, done: !!g.done,
+  position: g.position ?? 0,
+  created_at: g.created_at, updated_at: g.updated_at,
+});
+
 /** Everything the sync layer needs to know about each table. */
 const TABLES = {
   tasks:         { list: () => state.tasks,    row: toRow    },
   subscriptions: { list: () => state.subs,     row: subToRow },
   expenses:      { list: () => state.expenses, row: expToRow },
   income:        { list: () => state.income,   row: incToRow },
+  pots:          { list: () => state.pots,     row: potToRow },
+  pot_txns:      { list: () => state.txns,     row: txnToRow },
+  goals:         { list: () => state.goals,    row: goalToRow },
 };
 
 function setStatus(s, label) {
@@ -2728,14 +3256,20 @@ async function pull() {
     state.earlier = earlier ?? [];
 
     /* --- money tables: all small, so fetch everything --- */
-    const [subsRes, expRes, incRes] = await Promise.all([
+    const [subsRes, expRes, incRes, potRes, txnRes, goalRes] = await Promise.all([
       state.sb.from('subscriptions').select(SUB_COLS).order('position'),
       state.sb.from('expenses').select(EXP_COLS).order('spend_date'),
       state.sb.from('income').select(INC_COLS).order('received_on'),
+      state.sb.from('pots').select(POT_COLS).order('position'),
+      state.sb.from('pot_txns').select(TXN_COLS).order('happened_on'),
+      state.sb.from('goals').select(GOAL_COLS).order('position'),
     ]);
     if (subsRes.error) throw subsRes.error;
     if (expRes.error)  throw expRes.error;
     if (incRes.error)  throw incRes.error;
+    if (potRes.error)  throw potRes.error;
+    if (txnRes.error)  throw txnRes.error;
+    if (goalRes.error) throw goalRes.error;
 
     state.subs = [
       ...state.subs.filter(s => pending.has(s.id)),
@@ -2748,6 +3282,18 @@ async function pull() {
     state.income = [
       ...state.income.filter(i => pending.has(i.id)),
       ...(incRes.data ?? []).filter(i => !pending.has(i.id)).map(normalizeInc),
+    ];
+    state.pots = [
+      ...state.pots.filter(p => pending.has(p.id)),
+      ...(potRes.data ?? []).filter(p => !pending.has(p.id)).map(normalizePot),
+    ];
+    state.txns = [
+      ...state.txns.filter(t => pending.has(t.id)),
+      ...(txnRes.data ?? []).filter(t => !pending.has(t.id)).map(normalizeTxn),
+    ];
+    state.goals = [
+      ...state.goals.filter(g => pending.has(g.id)),
+      ...(goalRes.data ?? []).filter(g => !pending.has(g.id)).map(normalizeGoal),
     ];
 
     ensureCharges();
@@ -2933,6 +3479,9 @@ document.addEventListener('keydown', e => {
   else if (subSheet.root?.hidden    === false) closeSubSheet();
   else if (expSheet.root?.hidden    === false) closeExpSheet();
   else if (incSheet.root?.hidden    === false) closeIncSheet();
+  else if (moveSheet.root?.hidden   === false) closeMoveSheet();
+  else if (potSheet.root?.hidden    === false) closePotSheet();
+  else if (bankSheet.root?.hidden   === false) closeBank();
   else if (walletSheet.root?.hidden === false) closeWallet();
   else if (reportSheet.root?.hidden === false) closeReport();
   else if (!sheet.root.hidden) closeSheet();
