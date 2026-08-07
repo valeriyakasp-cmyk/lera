@@ -1066,21 +1066,8 @@ function openMenu(task, anchor) {
       () => doMove(task, m.date), { role: 'menuitem' },
     ));
 
-    const pick = document.createElement('label');
-    pick.className = 'menu__item menu__item--date';
-    pick.innerHTML = `<span class="menu__icon">${ICON.cal}</span><span>בחירת תאריך…</span>`;
-    const input = document.createElement('input');
-    input.type = 'date';
-    input.value = task.task_date;
-    input.setAttribute('aria-label', 'העברת המשימה לתאריך');
-    input.addEventListener('change', () => {
-      if (!input.value || input.value === task.task_date) return closeMenu();
-      const date = input.value;
-      closeMenu();
-      doMove(task, date);
-    });
-    pick.append(input);
-    menu.append(pick);
+    item('', `<span class="menu__icon">${ICON.cal}</span><span>בחירת תאריך…</span>`,
+      () => openDateSheet(task), { role: 'menuitem' });
     sep();
   }
 
@@ -1314,6 +1301,60 @@ doneSheet.save.addEventListener('click', () => {
 
 doneSheet.skip.addEventListener('click', () => { closeDoneSheet(); render(); });
 $$('[data-done-close]').forEach(b => b.addEventListener('click', () => { closeDoneSheet(); render(); }));
+
+/* ============================================================
+   RESCHEDULE SHEET
+   A real, visible date field. The previous version stretched an
+   invisible date input over the menu row, so tapping it did nothing.
+   ============================================================ */
+const dateSheet = {
+  root:  $('#dateSheet'),
+  title: $('#dateSheetTask'),
+  quick: $('#dateQuick'),
+  input: $('#dateInput'),
+  save:  $('#dateSaveBtn'),
+};
+let dateTarget = null;
+
+function openDateSheet(task) {
+  dateTarget = task;
+  dateSheet.title.textContent = task.title;
+  dateSheet.input.value = task.task_date;
+
+  const options = [
+    { label: 'היום',      date: isoDate() },
+    { label: 'מחר',       date: shiftDate(isoDate(), 1) },
+    { label: 'מחרתיים',   date: shiftDate(isoDate(), 2) },
+    { label: 'בעוד שבוע', date: shiftDate(isoDate(), 7) },
+  ].filter(o => o.date !== task.task_date);
+
+  dateSheet.quick.replaceChildren(...options.map(o => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'quick';
+    b.textContent = o.label;
+    b.addEventListener('click', () => { dateSheet.input.value = o.date; commitDate(); });
+    return b;
+  }));
+
+  dateSheet.root.hidden = false;
+  dateSheet.input.focus();
+}
+
+function closeDateSheet() { dateSheet.root.hidden = true; dateTarget = null; }
+
+function commitDate() {
+  const task = dateTarget;
+  const date = dateSheet.input.value;
+  if (!task || !date) return closeDateSheet();
+  closeDateSheet();
+  if (date === task.task_date) return;
+  doMove(task, date);
+}
+
+dateSheet.save.addEventListener('click', commitDate);
+dateSheet.input.addEventListener('keydown', e => { if (e.key === 'Enter') commitDate(); });
+$$('[data-date-close]').forEach(b => b.addEventListener('click', closeDateSheet));
 
 /* ============================================================
    CLIENT TAG
@@ -1683,6 +1724,96 @@ function burstConfetti() {
   })();
 }
 
+
+/* ============================================================
+   CHARTS
+   Plain HTML bars (they survive the PDF snapshot) and one SVG
+   donut. One hue per chart; the reader compares magnitude, so
+   nothing here needs a categorical palette.
+   ============================================================ */
+
+/** Completion ring. `pct` 0–100. */
+function donut(pct, size = 96) {
+  const stroke = 11;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const on = c * Math.max(0, Math.min(100, pct)) / 100;
+  const mid = size / 2;
+  return `<div class="donut" style="--size:${size}px">
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+      <circle cx="${mid}" cy="${mid}" r="${r}" fill="none" stroke="#E8E8EB" stroke-width="${stroke}"/>
+      <circle cx="${mid}" cy="${mid}" r="${r}" fill="none" stroke="#16A34A" stroke-width="${stroke}"
+              stroke-linecap="round" stroke-dasharray="${on.toFixed(1)} ${(c - on).toFixed(1)}"
+              transform="rotate(-90 ${mid} ${mid})"/>
+    </svg>
+    <span class="donut__label">${pct}<small>%</small></span>
+  </div>`;
+}
+
+/**
+ * Column chart from `points` — [{ v, tick, title }].
+ * Bars are divs, so html2canvas reproduces them exactly.
+ */
+function columnChart(points, { unit = '', tickEvery = 1 } = {}) {
+  if (!points.length) return '';
+  const max = Math.max(...points.map(p => p.v));
+  if (max <= 0) return '<p class="chart__empty">אין נתונים להצגה</p>';
+  const peak = points.reduce((a, b) => (b.v > a.v ? b : a), points[0]);
+
+  const cols = points.map((p, i) => {
+    const h = p.v > 0 ? Math.max(4, Math.round(p.v / max * 100)) : 0;
+    const isPeak = p === peak && p.v > 0;
+    return `<div class="chart__col" title="${esc(p.title ?? '')}">
+      ${isPeak ? `<span class="chart__peak">${esc(String(p.v) + unit)}</span>` : ''}
+      <span class="chart__bar${h ? '' : ' is-zero'}" style="height:${h}%"></span>
+      <span class="chart__tick">${i % tickEvery === 0 ? esc(p.tick ?? '') : ''}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="chart"><div class="chart__plot">${cols}</div></div>`;
+}
+
+/** One horizontal bar split into labelled parts — part-to-whole for two categories. */
+function splitBar(parts) {
+  const total = parts.reduce((n, p) => n + p.value, 0);
+  if (!total) return '';
+  return `<div class="split">
+    <div class="split__bar">
+      ${parts.filter(p => p.value > 0).map(p =>
+        `<i style="width:${(p.value / total * 100).toFixed(1)}%;background:${p.colour}"></i>`).join('')}
+    </div>
+    <div class="split__legend">
+      ${parts.map(p => `<span class="split__key">
+        <i style="background:${p.colour}"></i>${esc(p.label)}
+        <b dir="ltr">${esc(money(p.value))}</b></span>`).join('')}
+    </div>
+  </div>`;
+}
+
+/** Minutes of tracked work per hour of the day. */
+function hourlyLoad(timed) {
+  const bins = Array.from({ length: 24 }, () => 0);
+  for (const { t } of timed) {
+    const a = new Date(t.started_at), b = new Date(t.finished_at);
+    for (let h = a.getHours(); h <= b.getHours() && h < 24; h++) {
+      const from = Math.max(a.getTime(), new Date(a).setHours(h, 0, 0, 0));
+      const to   = Math.min(b.getTime(), new Date(a).setHours(h, 59, 59, 999));
+      bins[h] += Math.max(0, Math.round((to - from) / 60000));
+    }
+  }
+  return bins;
+}
+
+/** Trim empty hours from both ends, keeping a readable window. */
+function workWindow(bins) {
+  let first = bins.findIndex(v => v > 0);
+  let last  = bins.length - 1 - [...bins].reverse().findIndex(v => v > 0);
+  if (first < 0) { first = 8; last = 18; }
+  first = Math.max(0, Math.min(first, 8));
+  last  = Math.min(23, Math.max(last, first + 7));
+  return [first, last];
+}
+
 /* ============================================================
    DAILY REPORT
    ============================================================ */
@@ -1772,13 +1903,17 @@ function monthData(ym, rows) {
   };
 }
 
+/**
+ * שורת מדד. לכל פס יש משמעות אחת בלבד, זו שכתובה בכותרת המשנה של המקטע —
+ * בדוח היומי אחוז ההשלמה, בדוח החודשי הגודל היחסי.
+ */
 const barRow = (label, meta, pct, hue) => `
   <div class="rep__bar">
     <div class="rep__bar-head">
       <span class="chip${hue == null ? '' : ' chip--client'}"${hue == null ? '' : ` style="--hue:${hue}"`}>${esc(label)}</span>
       <span class="rep__bar-meta">${esc(meta)}</span>
     </div>
-    <div class="rep__track"><i style="width:${Math.max(2, Math.round(pct))}%"></i></div>
+    <div class="rep__track"><i style="width:${Math.max(pct > 0 ? 2 : 0, Math.round(pct))}%"></i></div>
   </div>`;
 
 function openReport() {
@@ -1803,15 +1938,30 @@ async function drawReport() {
 /* ---------------- daily ---------------- */
 function drawDayReport() {
   const d = reportData(state.date);
-  const maxTotal = Math.max(1, ...d.clients.map(c => c.total));
   const spend = expensesOn(state.date);
   const spendTotal = sum(spend, e => e.amount);
   const pushed = pushedFrom(state.date);
 
+  const bins = hourlyLoad(d.timed);
+  const [fromH, toH] = workWindow(bins);
+  const hourPoints = [];
+  for (let h = fromH; h <= toH; h++) {
+    hourPoints.push({
+      v: bins[h],
+      tick: String(h).padStart(2, '0'),
+      title: `${String(h).padStart(2, '0')}:00 · ${humanDuration(bins[h]) || 'ללא עבודה'}`,
+    });
+  }
+  const hourChart = d.totalMins
+    ? `<h3 class="rep__h">מתי עבדת</h3>
+       <p class="chart__cap">דקות עבודה מתועדות לפי שעה</p>
+       ${columnChart(hourPoints, { unit: ' דק׳', tickEvery: hourPoints.length > 12 ? 2 : 1 })}`
+    : '';
+
   const clientRows = d.clients
     .map(c => barRow(c.name,
       `${c.done}/${c.total}${c.mins ? ' · ' + humanDuration(c.mins) : ''}`,
-      c.total / maxTotal * 100,
+      c.total ? c.done / c.total * 100 : 0,
       c.name === NO_CLIENT ? null : clientHue(c.name)))
     .join('');
 
@@ -1847,7 +1997,7 @@ function drawDayReport() {
     <p class="rep__date">${esc(heDayName(state.date))} · ${esc(heDate(state.date))}</p>
 
     <div class="rep__hero">
-      <div class="rep__ring" style="--pct:${d.pct}"><span>${d.pct}<small>%</small></span></div>
+      ${donut(d.pct)}
       <div class="rep__kpis">
         <div class="rep__kpi"><b>${d.done.length}</b><span>הושלמו</span></div>
         <div class="rep__kpi"><b>${d.open.length}</b><span>נותרו</span></div>
@@ -1857,7 +2007,9 @@ function drawDayReport() {
       </div>
     </div>
 
-    ${d.clients.length ? `<h3 class="rep__h">לפי לקוח</h3>${clientRows}` : ''}
+    ${hourChart}
+    ${d.clients.length ? `<h3 class="rep__h">לפי לקוח</h3>
+       <p class="chart__cap">אורך הפס = אחוז המשימות שהושלמו אצל אותו לקוח</p>${clientRows}` : ''}
     ${timeline   ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
     ${spendRows  ? `<h3 class="rep__h">הוצאות היום</h3><ul class="rep__list">${spendRows}</ul>` : ''}
     ${leftovers  ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
@@ -1865,27 +2017,48 @@ function drawDayReport() {
     ${d.rows.length || spend.length ? '' : '<p class="rep__empty">אין משימות או הוצאות ליום הזה.</p>'}
 
     <div class="btn-row rep__actions">
-      <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
+      <button class="btn btn--primary" id="repPdf" type="button">הורדת PDF</button>
     </div>`;
 
-  $('#repCopy')?.addEventListener('click', () => copyText(dayReportText(d, spend, spendTotal, pushed)));
+  $('#repPdf')?.addEventListener('click', () => downloadReportPdf(`דוח יומי · ${heDayName(state.date)} ${heDate(state.date)}`));
 }
 
 /* ---------------- monthly ---------------- */
 function drawMonthReport() {
   const m = monthData(reportMonth, monthTasks ?? []);
   const maxSpend = Math.max(1, ...m.bySub.map(s => s.amount), m.oneTotal);
-  const maxTotal = Math.max(1, ...m.clients.map(c => c.total));
   const isNow = reportMonth === monthOf();
+
+  const days = new Date(Number(reportMonth.slice(0, 4)), Number(reportMonth.slice(5, 7)), 0).getDate();
+  const perDay = Array.from({ length: days }, () => 0);
+  m.done.forEach(t => {
+    const dnum = Number((t.task_date ?? '').slice(8, 10));
+    if (dnum >= 1 && dnum <= days) perDay[dnum - 1]++;
+  });
+  const dayPoints = perDay.map((v, i) => ({
+    v,
+    tick: String(i + 1),
+    title: `${i + 1} ב${heMonth(reportMonth).split(' ')[0]} · ${v} משימות`,
+  }));
+  const dayChart = m.done.length
+    ? `<h3 class="rep__h">משימות שהושלמו לאורך החודש</h3>
+       ${columnChart(dayPoints, { tickEvery: 5 })}`
+    : '';
+
+  const spendSplit = m.total
+    ? `<h3 class="rep__h">חלוקת ההוצאה</h3>${splitBar([
+        { label: 'מנויים',   value: m.subTotal, colour: '#4E93D4' },
+        { label: 'חד־פעמי', value: m.oneTotal, colour: '#E0900B' },
+      ])}`
+    : '';
 
   const subRows = m.bySub.map(s => barRow(s.name, money(s.amount), s.amount / maxSpend * 100, clientHue(s.name))).join('');
 
-  const maxClientSpend = Math.max(1, ...m.clients.map(c => c.spend));
   const clientRows = m.clients
     .map(c => barRow(c.name,
       [c.total ? `${c.done}/${c.total}` : '', c.mins ? humanDuration(c.mins) : '', c.spend ? money(c.spend) : '']
         .filter(Boolean).join(' · '),
-      Math.max(c.total / maxTotal, c.spend / maxClientSpend) * 100,
+      c.total ? c.done / c.total * 100 : 0,
       c.name === NO_CLIENT ? null : clientHue(c.name)))
     .join('');
 
@@ -1910,7 +2083,7 @@ function drawMonthReport() {
     </div>
 
     <div class="rep__hero">
-      <div class="rep__ring" style="--pct:${m.pct}"><span>${m.pct}<small>%</small></span></div>
+      ${donut(m.pct)}
       <div class="rep__kpis">
         <div class="rep__kpi"><b>${m.done.length}</b><span>משימות הושלמו</span></div>
         <div class="rep__kpi"><b>${m.totalMins ? esc(humanDuration(m.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
@@ -1924,13 +2097,17 @@ function drawMonthReport() {
       <div class="moneytile"><span>סה״כ</span><b dir="ltr">${esc(money(m.total))}</b></div>
     </div>
 
-    ${subRows    ? `<h3 class="rep__h">מנויים שחויבו</h3>${subRows}` : ''}
+    ${dayChart}
+    ${spendSplit}
+    ${subRows    ? `<h3 class="rep__h">מנויים שחויבו</h3>
+       <p class="chart__cap">אורך הפס = הסכום ביחס למנוי היקר ביותר</p>${subRows}` : ''}
     ${oneRows    ? `<h3 class="rep__h">רכישות חד־פעמיות</h3><ul class="rep__list">${oneRows}</ul>` : ''}
-    ${clientRows ? `<h3 class="rep__h">לפי לקוח</h3>${clientRows}` : ''}
+    ${clientRows ? `<h3 class="rep__h">לפי לקוח</h3>
+       <p class="chart__cap">אורך הפס = אחוז המשימות שהושלמו אצל אותו לקוח</p>${clientRows}` : ''}
     ${m.rows.length || m.spend.length ? '' : '<p class="rep__empty">אין נתונים לחודש הזה.</p>'}
 
     <div class="btn-row rep__actions">
-      <button class="btn btn--primary" id="repCopy" type="button">העתקת הדוח</button>
+      <button class="btn btn--primary" id="repPdf" type="button">הורדת PDF</button>
     </div>`;
 
   $('#rPrev').addEventListener('click', () => { reportMonth = shiftMonth(reportMonth, -1); drawReport(); });
@@ -1939,7 +2116,69 @@ function drawMonthReport() {
     reportMonth = shiftMonth(reportMonth, 1);
     drawReport();
   });
-  $('#repCopy')?.addEventListener('click', () => copyText(monthReportText(m)));
+  $('#repPdf')?.addEventListener('click', () => downloadReportPdf(`דוח חודשי · ${heMonth(reportMonth)}`));
+}
+
+/**
+ * Snapshot the rendered report and save it as a PDF.
+ * The libraries are pulled in only on the first click, and they are
+ * served from this site — nothing is fetched from a CDN.
+ */
+async function downloadReportPdf(title) {
+  const btn = $('#repPdf');
+  if (!btn) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'מכין PDF…';
+
+  let sheet;
+  try {
+    const { jsPDF, html2canvas } = await import('./pdf.js');
+
+    // Render a detached copy so the modal's scrolling never clips the page.
+    sheet = document.createElement('div');
+    sheet.className = 'pdfdoc';
+    sheet.innerHTML =
+      `<div class="pdfdoc__head">
+         <span class="pdfdoc__brand">המשימות שלי</span>
+         <span class="pdfdoc__title">${esc(title)}</span>
+       </div>` + reportSheet.body.innerHTML;
+    sheet.querySelector('.rep__actions')?.remove();
+    document.body.append(sheet);
+
+    const canvas = await html2canvas(sheet, { scale: 2, backgroundColor: '#ffffff', logging: false });
+
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 28;
+    const drawW = pageW - margin * 2;
+    const sliceH = Math.floor(canvas.width * (pageH - margin * 2) / drawW);
+
+    for (let y = 0, page = 0; y < canvas.height; y += sliceH, page++) {
+      const h = Math.min(sliceH, canvas.height - y);
+      const part = document.createElement('canvas');
+      part.width = canvas.width;
+      part.height = h;
+      const pctx = part.getContext('2d');
+      pctx.fillStyle = '#ffffff';                       // JPEG לא שומר שקיפות
+      pctx.fillRect(0, 0, part.width, part.height);
+      pctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      if (page) pdf.addPage();
+      // JPEG באיכות גבוהה — הקובץ יוצא קטן פי כמה מ-PNG וניתן לשלוח במייל
+      pdf.addImage(part.toDataURL('image/jpeg', 0.94), 'JPEG', margin, margin, drawW, h * drawW / canvas.width);
+    }
+
+    pdf.save(title.replace(/[\\/:*?"<>|·]+/g, ' ').trim() + '.pdf');
+    toast('הדוח הורד');
+  } catch (err) {
+    console.error(err);
+    toast('הפקת ה-PDF נכשלה');
+  } finally {
+    sheet?.remove();
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 async function copyText(text) {
@@ -2372,6 +2611,7 @@ document.addEventListener('keydown', e => {
   if (menuEl) closeMenu();
   else if (!doneSheet.root.hidden)   { closeDoneSheet(); render(); }
   else if (!clientSheet.root.hidden) closeClientSheet();
+  else if (!dateSheet.root.hidden)   closeDateSheet();
   else if (!subSheet.root.hidden)    closeSubSheet();
   else if (!expSheet.root.hidden)    closeExpSheet();
   else if (!walletSheet.root.hidden) closeWallet();
