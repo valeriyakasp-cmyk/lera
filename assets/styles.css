@@ -750,6 +750,8 @@ a { color: var(--blue-900); }
 }
 .chip--client:hover { background: hsl(var(--hue, 210) 72% 89%); }
 .chip--pick { height: 28px; font-size: 12.5px; cursor: pointer; }
+/* מנוי שמישהו אחר משלם — ניטרלי בכוונה, זה לא סטטוס */
+.chip--payer { background: #EFEDE9; color: #5B5347; }
 
 .chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s4); }
 
@@ -893,6 +895,8 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .rep__kpi { display: flex; align-items: baseline; gap: var(--s2); }
 .rep__kpi b { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
 .rep__kpi span { font-size: 12.5px; color: var(--ink-2); }
+.rep__kpi[data-tone="up"]   b { color: var(--green-ink); }
+.rep__kpi[data-tone="down"] b { color: #B4442E; }
 
 .rep__h {
   font-size: 12px; font-weight: 700; letter-spacing: .08em;
@@ -922,6 +926,7 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 }
 .rep__task { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .rep__dur { flex: none; font-size: 12px; font-weight: 600; color: var(--green-ink); }
+.rep__money--in { color: var(--green-ink); }
 .rep__row--open .rep__task { color: var(--ink-2); }
 .rep__empty { font-size: 14px; color: var(--ink-2); text-align: center; padding: var(--s5) 0; }
 .rep__actions { margin-top: var(--s5); }
@@ -955,6 +960,8 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   flex: none; font-size: 14px; font-weight: 700;
   font-variant-numeric: tabular-nums; color: var(--ink);
 }
+.spend__amount--in { color: var(--green-ink); }
+.spend__row.is-income { background: #F2FAF4; }
 .spend__add {
   display: flex; align-items: center; gap: var(--s2);
   width: 100%; min-height: 42px; padding: 0 var(--s3);
@@ -1023,6 +1030,14 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   font-size: 18px; font-weight: 700; letter-spacing: -.02em;
   font-variant-numeric: tabular-nums;
 }
+.moneytile--in b { color: var(--green-ink); }
+.moneytile--profit[data-tone="up"]   b { color: var(--green-ink); }
+.moneytile--profit[data-tone="down"] b { color: #B4442E; }
+.moneytile--profit[data-tone="up"]   { background: #F2FAF4; }
+.moneytile--profit[data-tone="down"] { background: #FCF2F0; }
+
+/* כותרת משנה רכה יותר, לקבוצות בתוך מקטע */
+.rep__h--soft { color: var(--ink-3); margin-top: var(--s4); }
 
 .wallet__note {
   font-size: 13.5px; color: var(--ink-2);
@@ -1081,6 +1096,9 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .exprow:first-child { border-top: 0; }
 .exprow:hover { background: var(--page); border-radius: var(--r-xs); }
 .exprow.is-sub .exprow__title { color: var(--ink-2); }
+.exprow.is-theirs { opacity: .62; }
+.exprow.is-income .exprow__amount { color: var(--green-ink); }
+.exprow__sub { color: var(--ink-2); font-weight: 400; }
 .exprow__date { flex: none; width: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; font-weight: 600; }
 .exprow__title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .exprow__amount { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }

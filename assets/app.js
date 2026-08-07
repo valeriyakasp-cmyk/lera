@@ -12,6 +12,7 @@ const LS = {
   clients:  'clients.v1',
   subs:     'subs.v1',
   expenses: 'expenses.v1',
+  income:   'income.v1',
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -118,12 +119,14 @@ const normalize = t => ({
 /** Postgres `numeric` can arrive as a string — coerce so maths stays maths. */
 const normalizeSub = s => ({ ...s, amount: Number(s.amount) || 0, billing_day: Number(s.billing_day) || 1 });
 const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0 });
+const normalizeInc = i => ({ ...i, amount: Number(i.amount) || 0 });
 
 const state = {
   date:     isoDate(),
   tasks:    read(LS.tasks, []).map(normalize),
   subs:     read(LS.subs, []),
   expenses: read(LS.expenses, []),
+  income:   read(LS.income, []),
   queue:    read(LS.queue, []),
   cfg:      read(LS.cfg, { url: '', key: '' }),
   ui:       read(LS.ui, { doneOpen: true }),
@@ -137,6 +140,7 @@ const persist = () => {
   write(LS.tasks, state.tasks);
   write(LS.subs, state.subs);
   write(LS.expenses, state.expenses);
+  write(LS.income, state.income);
   write(LS.queue, state.queue);
 };
 
@@ -226,7 +230,7 @@ function deleteTask(id) {
    bills. Every month it is active it stamps a row into expenses,
    so cancelling later never erases what was already paid.
    ============================================================ */
-function addSubscription({ name, amount, billing_day, active, started_on }) {
+function addSubscription({ name, amount, billing_day, active, started_on, payer }) {
   const sub = {
     id: uid(),
     name: name.trim(),
@@ -236,6 +240,7 @@ function addSubscription({ name, amount, billing_day, active, started_on }) {
     started_on: started_on ?? isoDate().slice(0, 8) + '01',
     cancelled_on: null,
     note: null,
+    payer: (payer ?? '').trim() || null,   // ריק = את משלמת
     position: state.subs.length,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -247,10 +252,21 @@ function addSubscription({ name, amount, billing_day, active, started_on }) {
 
 function updateSubscription(sub, patch) {
   const wasActive = sub.active;
+  const wasPayer  = sub.payer ?? null;
   Object.assign(sub, patch);
   if (wasActive && sub.active === false && !sub.cancelled_on) sub.cancelled_on = isoDate();
   if (sub.active) sub.cancelled_on = null;
   touchRow('subscriptions', sub);
+
+  // אם שינית מי משלם — גם החיובים שכבר נרשמו מתעדכנים,
+  // אחרת ההיסטוריה תסתור את מה שכתוב במנוי
+  if ((sub.payer ?? null) !== wasPayer) {
+    state.expenses.forEach(e => {
+      if (e.subscription_id !== sub.id) return;
+      e.payer = sub.payer ?? null;
+      touchRow('expenses', e);
+    });
+  }
 }
 
 /** Deleting the definition keeps the charges — they are the record. */
@@ -263,7 +279,7 @@ function deleteSubscription(id) {
   persist();
 }
 
-function addExpense({ title, amount, spend_date, client, kind, subscription_id, period }) {
+function addExpense({ title, amount, spend_date, client, kind, subscription_id, period, payer }) {
   const exp = {
     id: uid(),
     spend_date: spend_date ?? state.date,
@@ -274,6 +290,7 @@ function addExpense({ title, amount, spend_date, client, kind, subscription_id, 
     period: period ?? null,
     client: (client ?? '').trim() || null,
     note: null,
+    payer: (payer ?? '').trim() || null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -294,6 +311,48 @@ function deleteExpense(id) {
   queueOp({ type: 'delete', table: 'expenses', id });
   persist();
 }
+
+/* ---------- income ---------- */
+
+function addIncome({ client, title, amount, received_on }) {
+  const inc = {
+    id: uid(),
+    received_on: received_on ?? state.date,
+    client: (client ?? '').trim() || null,
+    title: (title ?? '').trim() || null,
+    amount: Number(amount) || 0,
+    note: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.income.push(inc);
+  if (inc.client) rememberClient(inc.client);
+  touchRow('income', inc);
+  return inc;
+}
+
+function updateIncome(inc, patch) {
+  Object.assign(inc, patch);
+  if (inc.client) rememberClient(inc.client);
+  touchRow('income', inc);
+}
+
+function deleteIncome(id) {
+  state.income = state.income.filter(i => i.id !== id);
+  queueOp({ type: 'delete', table: 'income', id });
+  persist();
+}
+
+const incomeOn = date => state.income.filter(i => i.received_on === date)
+                                     .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+const incomeIn = ym   => state.income.filter(i => (i.received_on ?? '').slice(0, 7) === ym);
+
+/**
+ * מה באמת יצא מהכיס שלך. חיוב שמישהו אחר משלם נשאר מתועד,
+ * אבל לא נספר כאן — אחרת הרווח יֵצא נמוך ממה שהוא.
+ */
+const isMine   = e => !e.payer;
+const myOutlay = list => sum(list.filter(isMine), e => e.amount);
 
 /**
  * Write the missing monthly charges for every subscription, from the
@@ -322,6 +381,7 @@ function ensureCharges() {
           kind: 'subscription',
           subscription_id: sub.id,
           period: ym,
+          payer: sub.payer ?? null,
         });
         added++;
       }
@@ -335,7 +395,7 @@ function ensureCharges() {
 const expensesOn    = date => state.expenses.filter(e => e.spend_date === date)
                                             .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
 const expensesIn    = ym   => state.expenses.filter(e => (e.spend_date ?? '').slice(0, 7) === ym);
-const monthlyActive = ()   => sum(state.subs.filter(s => s.active), s => s.amount);
+const monthlyActive = ()   => sum(state.subs.filter(s => s.active && !s.payer), s => s.amount);
 
 /** Toggling the parent cascades to every subtask — predictable both ways. */
 function setTaskDone(task, done) {
@@ -500,6 +560,9 @@ const el = {
   spendList:   $('#spendList'),
   spendAdd:    $('#spendAdd'),
   spendTitle:  $('#spendHeading'),
+  incomeList:  $('#incomeList'),
+  incomeAdd:   $('#incomeAdd'),
+  incomeTitle: $('#incomeHeading'),
 };
 
 const ICON = {
@@ -580,6 +643,7 @@ function render() {
   el.movedList.replaceChildren(...moved.map(movedNode));
 
   renderSpend();
+  renderIncome();
 }
 
 /** Open tasks that were planned for `date` but pushed to a later day. */
@@ -685,6 +749,43 @@ function renderSpend() {
     amt.className = 'spend__amount';
     amt.dir = 'ltr';
     amt.textContent = money(exp.amount);
+    li.append(amt);
+
+    return li;
+  }));
+}
+
+/** כסף שנכנס ביום שנבחר. */
+function renderIncome() {
+  if (!el.incomeList) return;               // HTML ישן מהמטמון
+  const rows = incomeOn(state.date);
+  const total = sum(rows, i => i.amount);
+
+  el.incomeTitle.textContent = rows.length ? `כסף שנכנס · ${money(total)}` : 'כסף שנכנס';
+
+  el.incomeList.replaceChildren(...rows.map(inc => {
+    const li = document.createElement('li');
+    li.className = 'spend__row is-income';
+
+    const label = document.createElement('button');
+    label.type = 'button';
+    label.className = 'spend__label';
+    label.textContent = inc.client ?? inc.title ?? 'תקבול';
+    label.title = 'עריכת התקבול';
+    label.addEventListener('click', () => openIncSheet(inc));
+    li.append(label);
+
+    if (inc.client && inc.title) {
+      const t = document.createElement('span');
+      t.className = 'spend__kind';
+      t.textContent = inc.title;
+      li.append(t);
+    }
+
+    const amt = document.createElement('span');
+    amt.className = 'spend__amount spend__amount--in';
+    amt.dir = 'ltr';
+    amt.textContent = '+' + money(inc.amount);
     li.append(amt);
 
     return li;
@@ -1433,10 +1534,21 @@ function renderWallet() {
   ensureCharges();
 
   const rows     = expensesIn(walletMonth);
-  const subRows  = rows.filter(e => e.kind === 'subscription');
-  const oneRows  = rows.filter(e => e.kind !== 'subscription');
+  const mine     = rows.filter(isMine);
+  const theirs   = rows.filter(e => !isMine(e));
+  const subRows  = mine.filter(e => e.kind === 'subscription');
+  const oneRows  = mine.filter(e => e.kind !== 'subscription');
+  const inRows   = incomeIn(walletMonth);
+
+  const earned = sum(inRows, i => i.amount);
+  const spent  = sum(mine,   e => e.amount);
+  const profit = earned - spent;
+
+  // מנויים מקובצים לפי מי משלם, כך שרואים בנפרד את מה שלא יוצא מהכיס שלך
   const active   = state.subs.filter(s => s.active);
   const inactive = state.subs.filter(s => !s.active);
+  const myActive = active.filter(isMine);
+  const payers   = [...new Set(active.filter(s => !isMine(s)).map(s => s.payer))].sort();
   const isNow    = walletMonth === monthOf();
 
   const b = walletSheet.body;
@@ -1452,24 +1564,36 @@ function renderWallet() {
     </div>
 
     <div class="moneyrow">
-      <div class="moneytile">
-        <span>סה״כ החודש</span>
-        <b dir="ltr">${money(sum(rows, e => e.amount))}</b>
+      <div class="moneytile moneytile--in">
+        <span>נכנס</span>
+        <b dir="ltr">${money(earned)}</b>
       </div>
       <div class="moneytile">
-        <span>מנויים</span>
-        <b dir="ltr">${money(sum(subRows, e => e.amount))}</b>
+        <span>יצא</span>
+        <b dir="ltr">${money(spent)}</b>
       </div>
-      <div class="moneytile">
-        <span>חד־פעמי</span>
-        <b dir="ltr">${money(sum(oneRows, e => e.amount))}</b>
+      <div class="moneytile moneytile--profit" data-tone="${profit < 0 ? 'down' : 'up'}">
+        <span>${profit < 0 ? 'הפסד' : 'רווח'}</span>
+        <b dir="ltr">${money(Math.abs(profit))}</b>
       </div>
     </div>
 
-    <p class="wallet__note">התחייבות חודשית שוטפת על מנויים פעילים: <strong dir="ltr">${money(monthlyActive())}</strong></p>
+    <p class="wallet__note">
+      מתוך מה שיצא: מנויים <strong dir="ltr">${money(sum(subRows, e => e.amount))}</strong> ·
+      חד־פעמי <strong dir="ltr">${money(sum(oneRows, e => e.amount))}</strong><br>
+      התחייבות חודשית שוטפת על מנויים פעילים שלך: <strong dir="ltr">${money(monthlyActive())}</strong>
+      ${theirs.length ? `<br>מישהו אחר משלם החודש <strong dir="ltr">${money(sum(theirs, e => e.amount))}</strong> — מתועד, לא נספר בהוצאות שלך.` : ''}
+    </p>
+
+    <h3 class="rep__h">כסף שנכנס</h3>
+    <div id="wIncome"></div>
+    <button class="spend__add" id="wAddInc" type="button"><span aria-hidden="true">+</span><span>הוספת תקבול</span></button>
 
     <h3 class="rep__h">מנויים פעילים</h3>
     <div id="wActive"></div>
+    ${payers.map(name => `
+      <h3 class="rep__h rep__h--soft">${esc(name)} משלם·ת</h3>
+      <div data-payer-box="${esc(name)}"></div>`).join('')}
     ${inactive.length ? '<h3 class="rep__h">מנויים לא פעילים</h3><div id="wInactive"></div>' : ''}
     <button class="spend__add" id="wAddSub" type="button"><span aria-hidden="true">+</span><span>הוספת מנוי</span></button>
 
@@ -1486,7 +1610,9 @@ function renderWallet() {
     main.type = 'button';
     main.className = 'subrow__main';
     main.innerHTML =
-      `<span class="subrow__name">${esc(sub.name)}</span>` +
+      `<span class="subrow__name">${esc(sub.name)}${
+        sub.payer ? `<span class="chip chip--payer">${esc(sub.payer)} משלם·ת</span>` : ''
+      }</span>` +
       `<span class="subrow__meta">${esc(money(sub.amount))} · חיוב ב-${sub.billing_day} בחודש` +
       (charged ? ' · <b>חויב</b>' : sub.active ? '' : ' · בוטל') + '</span>';
     main.addEventListener('click', () => openSubSheet(sub));
@@ -1511,10 +1637,38 @@ function renderWallet() {
   };
 
   const activeBox = $('#wActive', b);
-  if (active.length) activeBox.replaceChildren(...active.map(subNode));
-  else activeBox.innerHTML = '<p class="wallet__empty">אין עדיין מנויים. הוסיפי את הראשון כדי לראות את ההוצאה החודשית.</p>';
+  if (myActive.length) activeBox.replaceChildren(...myActive.map(subNode));
+  else activeBox.innerHTML = '<p class="wallet__empty">אין מנויים שאת משלמת עליהם החודש.</p>';
+
+  payers.forEach(name => {
+    const box = b.querySelector(`[data-payer-box="${CSS.escape(name)}"]`);
+    box?.replaceChildren(...active.filter(x => x.payer === name).map(subNode));
+  });
 
   if (inactive.length) $('#wInactive', b).replaceChildren(...inactive.map(subNode));
+
+  /* ---- income rows ---- */
+  const incBox = $('#wIncome', b);
+  if (inRows.length) {
+    incBox.replaceChildren(...inRows
+      .slice()
+      .sort((x, y) => (x.received_on ?? '').localeCompare(y.received_on ?? ''))
+      .map(inc => {
+        const r = document.createElement('button');
+        r.type = 'button';
+        r.className = 'exprow is-income';
+        r.innerHTML =
+          `<span class="exprow__date" dir="ltr">${esc((inc.received_on ?? '').slice(8, 10))}</span>` +
+          `<span class="exprow__title">${esc(inc.client ?? 'תקבול')}${
+            inc.title ? ` · <span class="exprow__sub">${esc(inc.title)}</span>` : ''
+          }</span>` +
+          `<span class="exprow__amount" dir="ltr">${esc(money(inc.amount))}</span>`;
+        r.addEventListener('click', () => openIncSheet(inc));
+        return r;
+      }));
+  } else {
+    incBox.innerHTML = '<p class="wallet__empty">עוד לא נרשם כסף שנכנס החודש.</p>';
+  }
 
   const expBox = $('#wExpenses', b);
   if (rows.length) {
@@ -1524,10 +1678,11 @@ function renderWallet() {
       .map(exp => {
         const r = document.createElement('button');
         r.type = 'button';
-        r.className = 'exprow' + (exp.kind === 'subscription' ? ' is-sub' : '');
+        r.className = 'exprow' + (exp.kind === 'subscription' ? ' is-sub' : '') + (isMine(exp) ? '' : ' is-theirs');
         r.innerHTML =
           `<span class="exprow__date" dir="ltr">${esc((exp.spend_date ?? '').slice(8, 10))}</span>` +
           `<span class="exprow__title">${esc(exp.title)}</span>` +
+          (exp.payer ? `<span class="chip chip--payer">${esc(exp.payer)}</span>` : '') +
           (exp.client ? `<span class="chip chip--client" style="--hue:${clientHue(exp.client)}">${esc(exp.client)}</span>` : '') +
           `<span class="exprow__amount" dir="ltr">${esc(money(exp.amount))}</span>`;
         r.addEventListener('click', () => openExpSheet(exp));
@@ -1544,6 +1699,7 @@ function renderWallet() {
     renderWallet();
   });
   $('#wAddSub', b).addEventListener('click', () => openSubSheet(null));
+  $('#wAddInc', b).addEventListener('click', () => openIncSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
   $('#wAddExp', b).addEventListener('click', () => openExpSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
 }
 
@@ -1558,6 +1714,8 @@ const subSheet = {
   amount: $('#subAmount'),
   day:    $('#subDay'),
   started:$('#subStarted'),
+  payer:  $('#subPayer'),
+  payers: $('#subPayerList'),
   active: $('#subActive'),
   msg:    $('#subMsg'),
   save:   $('#subSaveBtn'),
@@ -1573,6 +1731,12 @@ function openSubSheet(sub) {
   subSheet.day.value     = sub?.billing_day ?? 1;
   subSheet.started.value = (sub?.started_on ?? isoDate()).slice(0, 7);
   subSheet.active.checked = sub ? !!sub.active : true;
+  if (subSheet.payer) {
+    subSheet.payer.value = sub?.payer ?? '';
+    const known = [...new Set(state.subs.map(x => x.payer).filter(Boolean))];
+    subSheet.payers?.replaceChildren(
+      ...(known.length ? known : ['אמא']).map(n => Object.assign(document.createElement('option'), { value: n })));
+  }
   subSheet.del.hidden = !sub;
   subSheet.msg.hidden = true;
   subSheet.root.hidden = false;
@@ -1592,6 +1756,7 @@ subSheet.save.addEventListener('click', () => {
     billing_day: Math.min(28, Math.max(1, Number(subSheet.day.value) || 1)),
     active: subSheet.active.checked,
     started_on: (subSheet.started.value || isoDate().slice(0, 7)) + '-01',
+    payer: subSheet.payer?.value.trim() || null,
   };
 
   if (subTarget) updateSubscription(subTarget, patch);
@@ -1677,7 +1842,72 @@ expSheet.del.addEventListener('click', () => {
   toast('ההוצאה נמחקה');
 });
 $$('[data-exp-close]').forEach(x => x.addEventListener('click', closeExpSheet));
+
+/* ---------- income editor ---------- */
+const incSheet = {
+  root:    $('#incSheet'),
+  title:   $('#incSheetTitle'),
+  client:  $('#incClient'),
+  clients: $('#incClientList'),
+  name:    $('#incTitle'),
+  amount:  $('#incAmount'),
+  date:    $('#incDate'),
+  msg:     $('#incMsg'),
+  save:    $('#incSaveBtn'),
+  del:     $('#incDeleteBtn'),
+};
+let incTarget = null;
+
+function openIncSheet(inc, defaultDate) {
+  if (!incSheet.root) return;               // HTML ישן מהמטמון — לא מפילים את האפליקציה
+  incTarget = inc;
+  incSheet.title.textContent = inc ? 'עריכת תקבול' : 'תקבול חדש';
+  incSheet.client.value = inc?.client ?? '';
+  incSheet.name.value   = inc?.title ?? '';
+  incSheet.amount.value = inc ? inc.amount : '';
+  incSheet.date.value   = inc?.received_on ?? defaultDate ?? state.date;
+  incSheet.del.hidden   = !inc;
+  incSheet.msg.hidden   = true;
+  incSheet.clients.replaceChildren(
+    ...knownClients().map(c => Object.assign(document.createElement('option'), { value: c })));
+  incSheet.root.hidden = false;
+  incSheet.client.focus();
+}
+function closeIncSheet() { if (incSheet.root) incSheet.root.hidden = true; incTarget = null; }
+
+incSheet.save?.addEventListener('click', () => {
+  const amount = Number(incSheet.amount.value);
+  const client = incSheet.client.value.trim();
+  const fail = m => { incSheet.msg.textContent = m; incSheet.msg.dataset.tone = 'error'; incSheet.msg.hidden = false; };
+  if (!client && !incSheet.name.value.trim()) return fail('כתבי ממי נכנס הכסף.');
+  if (!(amount > 0)) return fail('הסכום צריך להיות מספר גדול מאפס.');
+
+  const patch = {
+    client: client || null,
+    title: incSheet.name.value.trim() || null,
+    amount,
+    received_on: incSheet.date.value || state.date,
+  };
+  if (incTarget) updateIncome(incTarget, patch);
+  else addIncome(patch);
+
+  closeIncSheet();
+  if (walletSheet.root?.hidden === false) renderWallet();
+  render();
+  toast('התקבול נשמר');
+});
+
+incSheet.del?.addEventListener('click', () => {
+  if (!incTarget) return closeIncSheet();
+  deleteIncome(incTarget.id);
+  closeIncSheet();
+  if (walletSheet.root?.hidden === false) renderWallet();
+  render();
+  toast('התקבול נמחק');
+});
+$$('[data-inc-close]').forEach(x => x.addEventListener('click', closeIncSheet));
 el.spendAdd.addEventListener('click', () => openExpSheet(null, state.date));
+el.incomeAdd?.addEventListener('click', () => openIncSheet(null, state.date));
 
 /* ============================================================
    CONFETTI — a short canvas burst, no dependencies
@@ -1876,7 +2106,7 @@ function monthData(ym, rows) {
 
   const byClient = new Map();
   const bump = (name, patch) => {
-    const c = byClient.get(name) ?? { name, total: 0, done: 0, mins: 0, spend: 0 };
+    const c = byClient.get(name) ?? { name, total: 0, done: 0, mins: 0, spend: 0, earned: 0 };
     Object.entries(patch).forEach(([k, v]) => { c[k] += v; });
     byClient.set(name, c);
   };
@@ -1885,10 +2115,15 @@ function monthData(ym, rows) {
     bump(t.client ?? NO_CLIENT, { total: 1, done: t.done ? 1 : 0, mins: m ?? 0 });
   });
 
-  const spend    = expensesIn(ym);
+  const allSpend = expensesIn(ym);
+  const spend    = allSpend.filter(isMine);          // מה שבאמת יצא מהכיס שלך
+  const theirs   = allSpend.filter(e => !isMine(e));
   const subSpend = spend.filter(e => e.kind === 'subscription');
   const oneSpend = spend.filter(e => e.kind !== 'subscription');
   oneSpend.forEach(e => { if (e.client) bump(e.client, { total: 0, done: 0, mins: 0, spend: e.amount }); });
+
+  const income = incomeIn(ym);
+  income.forEach(i => { if (i.client) bump(i.client, { total: 0, done: 0, mins: 0, spend: 0, earned: i.amount }); });
 
   const bySub = new Map();
   subSpend.forEach(e => bySub.set(e.title, (bySub.get(e.title) ?? 0) + Number(e.amount || 0)));
@@ -1897,11 +2132,13 @@ function monthData(ym, rows) {
     rows, done, timed,
     totalMins: timed.reduce((n, x) => n + x.mins, 0),
     pct: rows.length ? Math.round(done.length / rows.length * 100) : 0,
-    clients: [...byClient.values()].sort((a, b) => b.total - a.total || b.spend - a.spend),
-    spend, subSpend, oneSpend,
-    subTotal: sum(subSpend, e => e.amount),
-    oneTotal: sum(oneSpend, e => e.amount),
-    total:    sum(spend,    e => e.amount),
+    clients: [...byClient.values()].sort((a, b) => b.earned - a.earned || b.total - a.total || b.spend - a.spend),
+    spend, subSpend, oneSpend, theirs, income,
+    subTotal:    sum(subSpend, e => e.amount),
+    oneTotal:    sum(oneSpend, e => e.amount),
+    total:       sum(spend,    e => e.amount),
+    othersTotal: sum(theirs,   e => e.amount),
+    earned:      sum(income,   i => i.amount),
     bySub: [...bySub.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount),
   };
 }
@@ -1910,13 +2147,15 @@ function monthData(ym, rows) {
  * שורת מדד. לכל פס יש משמעות אחת בלבד, זו שכתובה בכותרת המשנה של המקטע —
  * בדוח היומי אחוז ההשלמה, בדוח החודשי הגודל היחסי.
  */
-const barRow = (label, meta, pct, hue) => `
+const barRow = (label, meta, pct, hue, colour = null) => `
   <div class="rep__bar">
     <div class="rep__bar-head">
       <span class="chip${hue == null ? '' : ' chip--client'}"${hue == null ? '' : ` style="--hue:${hue}"`}>${esc(label)}</span>
       <span class="rep__bar-meta">${esc(meta)}</span>
     </div>
-    <div class="rep__track"><i style="width:${Math.max(pct > 0 ? 2 : 0, Math.round(pct))}%"></i></div>
+    <div class="rep__track"><i style="width:${Math.max(pct > 0 ? 2 : 0, Math.round(pct))}%${
+      colour ? `;background:${colour}` : ''
+    }"></i></div>
   </div>`;
 
 function openReport() {
@@ -1942,7 +2181,10 @@ async function drawReport() {
 function drawDayReport() {
   const d = reportData(state.date);
   const spend = expensesOn(state.date);
-  const spendTotal = sum(spend, e => e.amount);
+  const spendTotal = myOutlay(spend);                    // בלי מה שמישהו אחר משלם
+  const othersTotal = sum(spend.filter(e => !isMine(e)), e => e.amount);
+  const earned = sum(incomeOn(state.date), i => i.amount);
+  const profit = earned - spendTotal;
   const pushed = pushedFrom(state.date);
 
   const bins = hourlyLoad(d.timed);
@@ -1990,10 +2232,17 @@ function drawDayReport() {
     </li>`).join('');
 
   const spendRows = spend.map(e => `
-    <li class="rep__row">
+    <li class="rep__row${isMine(e) ? '' : ' rep__row--open'}">
       <span class="rep__task">${esc(e.title)}</span>
       ${e.kind === 'subscription' ? '<span class="spend__kind">מנוי</span>' : ''}
+      ${e.payer ? `<span class="chip chip--payer">${esc(e.payer)} משלם·ת</span>` : ''}
       <span class="rep__money" dir="ltr">${esc(money(e.amount))}</span>
+    </li>`).join('');
+
+  const incRows = incomeOn(state.date).map(i => `
+    <li class="rep__row">
+      <span class="rep__task">${esc(i.client ?? 'תקבול')}${i.title ? ` · ${esc(i.title)}` : ''}</span>
+      <span class="rep__money rep__money--in" dir="ltr">+${esc(money(i.amount))}</span>
     </li>`).join('');
 
   reportSheet.body.innerHTML = `
@@ -2005,7 +2254,9 @@ function drawDayReport() {
         <div class="rep__kpi"><b>${d.done.length}</b><span>הושלמו</span></div>
         <div class="rep__kpi"><b>${d.open.length}</b><span>נותרו</span></div>
         <div class="rep__kpi"><b>${d.totalMins ? esc(humanDuration(d.totalMins)) : '—'}</b><span>זמן עבודה</span></div>
-        <div class="rep__kpi"><b dir="ltr">${spendTotal ? esc(money(spendTotal)) : '—'}</b><span>הוצאות</span></div>
+        <div class="rep__kpi"><b dir="ltr">${earned ? esc(money(earned)) : '—'}</b><span>נכנס</span></div>
+        <div class="rep__kpi"><b dir="ltr">${spendTotal ? esc(money(spendTotal)) : '—'}</b><span>יצא</span></div>
+        ${earned || spendTotal ? `<div class="rep__kpi" data-tone="${profit < 0 ? 'down' : 'up'}"><b dir="ltr">${esc(money(Math.abs(profit)))}</b><span>${profit < 0 ? 'הפסד' : 'רווח'}</span></div>` : ''}
         ${pushed.length ? `<div class="rep__kpi"><b>${pushed.length}</b><span>הועברו הלאה</span></div>` : ''}
       </div>
     </div>
@@ -2014,10 +2265,13 @@ function drawDayReport() {
     ${d.clients.length ? `<h3 class="rep__h">לפי לקוח</h3>
        <p class="chart__cap">אורך הפס = אחוז המשימות שהושלמו אצל אותו לקוח</p>${clientRows}` : ''}
     ${timeline   ? `<h3 class="rep__h">מה נעשה ומתי</h3><ul class="rep__list">${timeline}</ul>` : ''}
-    ${spendRows  ? `<h3 class="rep__h">הוצאות היום</h3><ul class="rep__list">${spendRows}</ul>` : ''}
+    ${incRows    ? `<h3 class="rep__h">כסף שנכנס</h3><ul class="rep__list">${incRows}</ul>` : ''}
+    ${spendRows  ? `<h3 class="rep__h">הוצאות היום</h3>${
+      othersTotal ? `<p class="chart__cap">${esc(money(othersTotal))} מזה משלם מישהו אחר ולא נספר ברווח</p>` : ''
+    }<ul class="rep__list">${spendRows}</ul>` : ''}
     ${leftovers  ? `<h3 class="rep__h">נשאר פתוח</h3><ul class="rep__list">${leftovers}</ul>` : ''}
     ${pushedRows ? `<h3 class="rep__h">הועברו ליום אחר</h3><ul class="rep__list">${pushedRows}</ul>` : ''}
-    ${d.rows.length || spend.length ? '' : '<p class="rep__empty">אין משימות או הוצאות ליום הזה.</p>'}
+    ${d.rows.length || spend.length || earned ? '' : '<p class="rep__empty">אין משימות, הוצאות או הכנסות ליום הזה.</p>'}
 
     <div class="btn-row rep__actions">
       <button class="btn btn--primary" id="repPdf" type="button">הורדת PDF</button>
@@ -2030,6 +2284,7 @@ function drawDayReport() {
 function drawMonthReport() {
   const m = monthData(reportMonth, monthTasks ?? []);
   const maxSpend = Math.max(1, ...m.bySub.map(s => s.amount), m.oneTotal);
+  const profit = m.earned - m.total;
   const isNow = reportMonth === monthOf();
 
   const days = new Date(Number(reportMonth.slice(0, 4)), Number(reportMonth.slice(5, 7)), 0).getDate();
@@ -2055,13 +2310,43 @@ function drawMonthReport() {
       ])}`
     : '';
 
+  // נכנס מול יצא — שני פסים באותו קנה מידה, כדי שהיחס ביניהם ייקרא מיד
+  const flowMax = Math.max(m.earned, m.total, 1);
+  const flowChart = (m.earned || m.total)
+    ? `<h3 class="rep__h">נכנס מול יצא</h3>
+       <p class="chart__cap">שני הפסים באותו קנה מידה. הפער ביניהם הוא ${profit < 0 ? 'ההפסד' : 'הרווח'}.</p>
+       ${barRow('נכנס', money(m.earned), m.earned / flowMax * 100, null, '#0F8A57')}
+       ${barRow('יצא',  money(m.total),  m.total  / flowMax * 100, null, '#4E93D4')}`
+    : '';
+
+  const incRows = m.income
+    .slice().sort((a, b) => (a.received_on ?? '').localeCompare(b.received_on ?? ''))
+    .map(i => `
+      <li class="rep__row">
+        <span class="rep__time" dir="ltr">${esc((i.received_on ?? '').slice(8, 10))}/${esc((i.received_on ?? '').slice(5, 7))}</span>
+        <span class="rep__task">${esc(i.client ?? 'תקבול')}${i.title ? ` · ${esc(i.title)}` : ''}</span>
+        <span class="rep__money rep__money--in" dir="ltr">+${esc(money(i.amount))}</span>
+      </li>`).join('');
+
   const subRows = m.bySub.map(s => barRow(s.name, money(s.amount), s.amount / maxSpend * 100, clientHue(s.name))).join('');
 
-  const clientRows = m.clients
+  // הכנסה ומשימות הם שני סיפורים שונים, אז כל אחד מקבל מקטע משלו
+  // ופס עם משמעות אחת — אחרת לקוח ששילם ₪4,000 מקבל פס ריק.
+  const maxEarned = Math.max(1, ...m.clients.map(c => c.earned));
+  const earnRows = m.clients
+    .filter(c => c.earned > 0)
     .map(c => barRow(c.name,
-      [c.total ? `${c.done}/${c.total}` : '', c.mins ? humanDuration(c.mins) : '', c.spend ? money(c.spend) : '']
-        .filter(Boolean).join(' · '),
-      c.total ? c.done / c.total * 100 : 0,
+      [money(c.earned), c.spend ? `הוצאה ${money(c.spend)}` : ''].filter(Boolean).join(' · '),
+      c.earned / maxEarned * 100,
+      c.name === NO_CLIENT ? null : clientHue(c.name),
+      '#0F8A57'))
+    .join('');
+
+  const clientRows = m.clients
+    .filter(c => c.total > 0)
+    .map(c => barRow(c.name,
+      [`${c.done}/${c.total}`, c.mins ? humanDuration(c.mins) : ''].filter(Boolean).join(' · '),
+      c.done / c.total * 100,
       c.name === NO_CLIENT ? null : clientHue(c.name)))
     .join('');
 
@@ -2095,19 +2380,26 @@ function drawMonthReport() {
     </div>
 
     <div class="moneyrow">
-      <div class="moneytile"><span>מנויים</span><b dir="ltr">${esc(money(m.subTotal))}</b></div>
-      <div class="moneytile"><span>חד־פעמי</span><b dir="ltr">${esc(money(m.oneTotal))}</b></div>
-      <div class="moneytile"><span>סה״כ</span><b dir="ltr">${esc(money(m.total))}</b></div>
+      <div class="moneytile moneytile--in"><span>נכנס</span><b dir="ltr">${esc(money(m.earned))}</b></div>
+      <div class="moneytile"><span>יצא</span><b dir="ltr">${esc(money(m.total))}</b></div>
+      <div class="moneytile moneytile--profit" data-tone="${profit < 0 ? 'down' : 'up'}">
+        <span>${profit < 0 ? 'הפסד' : 'רווח'}</span><b dir="ltr">${esc(money(Math.abs(profit)))}</b>
+      </div>
     </div>
+    ${m.othersTotal ? `<p class="wallet__note">${esc(money(m.othersTotal))} שילם מישהו אחר — מתועד בארנק, לא נספר כאן.</p>` : ''}
 
     ${dayChart}
+    ${flowChart}
+    ${incRows ? `<h3 class="rep__h">כסף שנכנס</h3><ul class="rep__list">${incRows}</ul>` : ''}
     ${spendSplit}
     ${subRows    ? `<h3 class="rep__h">מנויים שחויבו</h3>
        <p class="chart__cap">אורך הפס = הסכום ביחס למנוי היקר ביותר</p>${subRows}` : ''}
     ${oneRows    ? `<h3 class="rep__h">רכישות חד־פעמיות</h3><ul class="rep__list">${oneRows}</ul>` : ''}
-    ${clientRows ? `<h3 class="rep__h">לפי לקוח</h3>
+    ${earnRows ? `<h3 class="rep__h">הכנסה לפי לקוח</h3>
+       <p class="chart__cap">אורך הפס = הסכום ביחס ללקוח שהכניס הכי הרבה</p>${earnRows}` : ''}
+    ${clientRows ? `<h3 class="rep__h">משימות לפי לקוח</h3>
        <p class="chart__cap">אורך הפס = אחוז המשימות שהושלמו אצל אותו לקוח</p>${clientRows}` : ''}
-    ${m.rows.length || m.spend.length ? '' : '<p class="rep__empty">אין נתונים לחודש הזה.</p>'}
+    ${m.rows.length || m.spend.length || m.earned ? '' : '<p class="rep__empty">אין נתונים לחודש הזה.</p>'}
 
     <div class="btn-row rep__actions">
       <button class="btn btn--primary" id="repPdf" type="button">הורדת PDF</button>
@@ -2276,8 +2568,9 @@ const toRow = t => ({
   updated_at: t.updated_at,
 });
 
-const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,position,created_at,updated_at';
-const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,created_at,updated_at';
+const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,payer,position,created_at,updated_at';
+const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,created_at,updated_at';
+const INC_COLS = 'id,received_on,client,title,amount,note,created_at,updated_at';
 
 const subToRow = s => ({
   id: s.id,
@@ -2289,6 +2582,7 @@ const subToRow = s => ({
   started_on: s.started_on ?? null,
   cancelled_on: s.cancelled_on ?? null,
   note: s.note ?? null,
+  payer: s.payer ?? null,
   position: s.position ?? 0,
   created_at: s.created_at,
   updated_at: s.updated_at,
@@ -2305,8 +2599,21 @@ const expToRow = e => ({
   period: e.period ?? null,
   client: e.client ?? null,
   note: e.note ?? null,
+  payer: e.payer ?? null,
   created_at: e.created_at,
   updated_at: e.updated_at,
+});
+
+const incToRow = i => ({
+  id: i.id,
+  user_id: state.user.id,
+  received_on: i.received_on,
+  client: i.client ?? null,
+  title: i.title ?? null,
+  amount: i.amount,
+  note: i.note ?? null,
+  created_at: i.created_at,
+  updated_at: i.updated_at,
 });
 
 /** Everything the sync layer needs to know about each table. */
@@ -2314,6 +2621,7 @@ const TABLES = {
   tasks:         { list: () => state.tasks,    row: toRow    },
   subscriptions: { list: () => state.subs,     row: subToRow },
   expenses:      { list: () => state.expenses, row: expToRow },
+  income:        { list: () => state.income,   row: incToRow },
 };
 
 function setStatus(s, label) {
@@ -2419,13 +2727,15 @@ async function pull() {
       .order('task_date', { ascending: false }).limit(200);
     state.earlier = earlier ?? [];
 
-    /* --- subscriptions and expenses: both small, so fetch everything --- */
-    const [subsRes, expRes] = await Promise.all([
+    /* --- money tables: all small, so fetch everything --- */
+    const [subsRes, expRes, incRes] = await Promise.all([
       state.sb.from('subscriptions').select(SUB_COLS).order('position'),
       state.sb.from('expenses').select(EXP_COLS).order('spend_date'),
+      state.sb.from('income').select(INC_COLS).order('received_on'),
     ]);
     if (subsRes.error) throw subsRes.error;
     if (expRes.error)  throw expRes.error;
+    if (incRes.error)  throw incRes.error;
 
     state.subs = [
       ...state.subs.filter(s => pending.has(s.id)),
@@ -2434,6 +2744,10 @@ async function pull() {
     state.expenses = [
       ...state.expenses.filter(e => pending.has(e.id)),
       ...(expRes.data ?? []).filter(e => !pending.has(e.id)).map(normalizeExp),
+    ];
+    state.income = [
+      ...state.income.filter(i => pending.has(i.id)),
+      ...(incRes.data ?? []).filter(i => !pending.has(i.id)).map(normalizeInc),
     ];
 
     ensureCharges();
@@ -2618,6 +2932,7 @@ document.addEventListener('keydown', e => {
   else if (dateSheet.root?.hidden   === false) closeDateSheet();
   else if (subSheet.root?.hidden    === false) closeSubSheet();
   else if (expSheet.root?.hidden    === false) closeExpSheet();
+  else if (incSheet.root?.hidden    === false) closeIncSheet();
   else if (walletSheet.root?.hidden === false) closeWallet();
   else if (reportSheet.root?.hidden === false) closeReport();
   else if (!sheet.root.hidden) closeSheet();
