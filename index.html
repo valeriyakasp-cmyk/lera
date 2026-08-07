@@ -406,6 +406,11 @@
         <input id="expClient" type="text" maxlength="60" placeholder="למי זה שייך" autocomplete="off" list="expClientList">
         <datalist id="expClientList"></datalist>
       </div>
+      <div class="field">
+        <label for="expPot">מאיפה יורד הכסף</label>
+        <select id="expPot"></select>
+        <p class="field__hint">אם לא תבחרי קופה, ההוצאה תקוזז מההכנסה הבאה שתיכנס החודש.</p>
+      </div>
       <p class="sheet__msg" id="expMsg" hidden></p>
       <div class="btn-row">
         <button class="btn btn--primary" id="expSaveBtn" type="button">שמירה</button>
@@ -451,6 +456,20 @@
         <button class="btn btn--quiet" id="incDeleteBtn" type="button">מחיקה</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ═══════════ INCOME SPLIT ═══════════ -->
+<div class="sheet" id="splitSheet" hidden>
+  <div class="sheet__scrim" data-split-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="splitSheetTitle">
+    <div class="sheet__head">
+      <h2 id="splitSheetTitle">חלוקת ההכנסה</h2>
+      <button class="icon-btn" type="button" data-split-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body" id="splitBody"></div>
   </div>
 </div>
 
