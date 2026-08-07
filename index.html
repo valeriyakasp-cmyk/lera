@@ -210,6 +210,32 @@
   </div>
 </div>
 
+<!-- ═══════════ RESCHEDULE ═══════════ -->
+<div class="sheet" id="dateSheet" hidden>
+  <div class="sheet__scrim" data-date-close></div>
+  <div class="sheet__panel sheet__panel--sm" role="dialog" aria-modal="true" aria-labelledby="dateSheetTitle">
+    <div class="sheet__head">
+      <h2 id="dateSheetTitle">העברה לתאריך</h2>
+      <button class="icon-btn" type="button" data-date-close aria-label="סגירה">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="sheet__body">
+      <p class="donesheet__task" id="dateSheetTask"></p>
+      <p class="sheet__hint">לאיזה יום להעביר את המשימה?</p>
+      <div class="quickrow" id="dateQuick"></div>
+      <div class="field">
+        <label for="dateInput">תאריך</label>
+        <input id="dateInput" type="date" dir="ltr">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn--primary" id="dateSaveBtn" type="button">העברה</button>
+        <button class="btn btn--quiet" type="button" data-date-close>ביטול</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════ COMPLETION SHEET — when did you start? ═══════════ -->
 <div class="sheet" id="doneSheet" hidden>
   <div class="sheet__scrim" data-done-close></div>
