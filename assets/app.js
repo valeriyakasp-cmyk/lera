@@ -2432,36 +2432,66 @@ function drawSplit() {
     drawSplit();
   }));
 
-  // שינוי אחוז — הסכומים מחושבים מחדש לבד, לכל הקופות
-  $$('[data-pct]', splitSheet.body).forEach(inp => inp.addEventListener('input', () => {
-    splitPcts = Object.fromEntries(
-      $$('[data-pct]', splitSheet.body).map(x => [x.dataset.pct, Number(x.value) || 0]));
-    splitParts = null;                  // האחוזים מנצחים סכום שהוקלד קודם
-    const focused = inp.dataset.pct;
-    drawSplit();
-    // number inputs לא תומכים ב-setSelectionRange, אז רק מחזירים פוקוס
-    $(`[data-pct="${focused}"]`, splitSheet.body)?.focus();
-  }));
+  /**
+   * מעדכן את המספרים במקום, בלי לצייר את המסך מחדש.
+   * ציור מחדש באמצע הקלדה החליף את השדה שהאצבע נמצאת בו,
+   * והתווים נכנסו במקום הלא נכון — לכן כאן רק מעדכנים ערכים.
+   */
+  const syncSplit = from => {
+    const pctInputs = $$('[data-pct]', splitSheet.body);
+    const amtInputs = $$('[data-pot]', splitSheet.body);
 
-  // שינוי סכום ידני — האחוזים מתעדכנים כדי לשקף אותו
-  $$('[data-pot]', splitSheet.body).forEach(inp => inp.addEventListener('input', () => {
-    splitParts = Object.fromEntries(
-      $$('[data-pot]', splitSheet.body).map(x => [x.dataset.pot, Number(x.value) || 0]));
-    const nowAllocated = sum(Object.values(splitParts), v => v);
-    const d = Math.round((net - nowAllocated) * 100) / 100;
+    if (from === 'pct') {
+      splitParts = null;
+      splitPcts = Object.fromEntries(pctInputs.map(x => [x.dataset.pct, Number(x.value) || 0]));
+      const parts = currentParts(Math.max(0, net));
+      amtInputs.forEach(x => {
+        const found = parts.find(v => v.pot.id === x.dataset.pot);
+        x.value = (found?.amount ?? 0).toFixed(2);
+      });
+    } else {
+      splitParts = Object.fromEntries(amtInputs.map(x => [x.dataset.pot, Number(x.value) || 0]));
+      pctInputs.forEach(x => {
+        const share = net > 0 ? (splitParts[x.dataset.pct] ?? 0) / net * 100 : 0;
+        x.value = String(Math.round(share * 10) / 10);
+      });
+    }
 
-    $$('[data-pct]', splitSheet.body).forEach(x => {
-      const share = net > 0 ? (splitParts[x.dataset.pct] ?? 0) / net * 100 : 0;
-      x.value = String(Math.round(share * 10) / 10);
-    });
+    const allocatedNow = sum(amtInputs, x => Number(x.value) || 0);
+    const d = Math.round((net - allocatedNow) * 100) / 100;
+    const pctNow = Math.round(sum(pctInputs, x => Number(x.value) || 0) * 10) / 10;
+    const over = amtInputs.some(x => Number(x.value) < 0);
 
+    const ok = d === 0 && net >= 0 && !over;
     const note = $('.splitcheck', splitSheet.body);
-    note.dataset.ok = String(d === 0);
-    note.firstChild.nodeValue = d === 0
-      ? 'הסכומים מסתדרים בדיוק ✓ '
-      : `${d > 0 ? 'עוד' : 'יותר מדי'} ${money(Math.abs(d))} — צריך להגיע ל-${money(net)} `;
-    $('#splitConfirm', splitSheet.body).disabled = !(d === 0 && net >= 0);
-  }));
+    note.dataset.ok = String(ok);
+    note.firstChild.nodeValue = over
+      ? 'סכום לא יכול להיות שלילי '
+      : d !== 0
+        ? `${d > 0 ? 'נשארו' : 'חורג ב-'}${d > 0 ? ' ' : ''}${money(Math.abs(d))} — הסכומים צריכים להצטבר בדיוק ל-${money(net)} `
+        : pctNow !== 100
+          ? `סך האחוזים ${pctNow}% — צריך להגיע ל-100% `
+          : 'הסכומים מסתדרים בדיוק ✓ ';
+    $('#splitConfirm', splitSheet.body).disabled = !ok;
+  };
+
+  $$('[data-pct]', splitSheet.body).forEach(inp => {
+    inp.addEventListener('input', () => syncSplit('pct'));
+    // מגבילים רק כשעוזבים את השדה, אחרת אי אפשר להקליד "100" (ה-1 היה נחתך)
+    inp.addEventListener('change', () => {
+      const v = Math.min(100, Math.max(0, Number(inp.value) || 0));
+      inp.value = String(v);
+      syncSplit('pct');
+    });
+  });
+
+  $$('[data-pot]', splitSheet.body).forEach(inp => {
+    inp.addEventListener('input', () => syncSplit('amt'));
+    inp.addEventListener('change', () => {
+      if (Number(inp.value) < 0) inp.value = '0';
+      syncSplit('amt');
+    });
+  });
 
   $('#splitReset', splitSheet.body)?.addEventListener('click', () => {
     splitParts = null; splitPcts = null; drawSplit();
@@ -2479,8 +2509,19 @@ function drawSplit() {
   });
 
   $('#splitConfirm', splitSheet.body).addEventListener('click', () => {
+    const live = $$('[data-pot]', splitSheet.body).map(x => Number(x.value) || 0);
+    const off = Math.round((net - sum(live, v => v)) * 100) / 100;
+
+    // שומר אחרון: גם אם הכפתור נפתח משום מה, לא נשמרת חלוקה שלא מסתדרת
+    if (off !== 0 || net < 0 || live.some(v => v < 0)) {
+      const note = $('.splitcheck', splitSheet.body);
+      note.dataset.ok = 'false';
+      note.firstChild.nodeValue = `הסכומים צריכים להצטבר בדיוק ל-${money(net)} `;
+      return;
+    }
+
     const chosen = (splitParts || splitPcts)
-      ? parts.filter(x => x.amount)
+      ? potsByPos().map((pot, k) => ({ pot, amount: live[k] })).filter(x => x.amount)
       : null;
     const res = applyIncomeSplit(inc, { settledIds: [...splitChecked], parts: chosen });
     closeSplitSheet();
