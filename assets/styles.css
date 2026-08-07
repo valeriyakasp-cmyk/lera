@@ -1467,9 +1467,25 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 }
 .splitrow__dot { width: 10px; height: 10px; border-radius: 999px; flex: none; background: var(--pot); }
 .splitrow__name { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 600; }
-.splitrow__pct { flex: none; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* האחוז ניתן לעריכה — שינוי שלו מחשב את הסכומים מחדש */
+.splitrow__pctbox {
+  flex: none; display: inline-flex; align-items: center; gap: 1px;
+  font-size: 12.5px; color: var(--ink-2); font-weight: 600;
+}
+.splitrow__pct {
+  width: 48px; height: 34px;
+  padding-inline: 4px; text-align: center;
+  border: 1px solid var(--line); border-radius: var(--r-xs);
+  background: var(--surface);
+  font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  -moz-appearance: textfield;
+}
+.splitrow__pct::-webkit-outer-spin-button,
+.splitrow__pct::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.splitrow__pct:focus { border-color: var(--pot); }
 .splitrow__input {
-  flex: none; width: 106px; height: 38px;
+  flex: none; width: 100px; height: 38px;
   padding-inline: var(--s2); text-align: end;
   border: 1px solid var(--line); border-radius: var(--r-xs);
   background: var(--page);
@@ -1481,6 +1497,15 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   text-align: center; color: #B4442E;
 }
 .splitcheck[data-ok="true"] { color: var(--green-ink); }
+.splitcheck__undo {
+  display: block; margin: 6px auto 0;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.splitcheck__undo:hover { color: var(--ink); }
+
+.btn--danger { color: #B4442E; }
+.btn--danger:hover { background: #FCF2F0; }
 
 .chip--wait { background: #FBF0DC; color: #7A5410; }
 .chip--pot  { background: color-mix(in srgb, var(--pot) 14%, #fff); color: var(--pot); }

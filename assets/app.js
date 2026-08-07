@@ -2307,26 +2307,46 @@ const POT_COLOURS = ['#8B5CF6', '#2E86C1', '#0F8A57', '#E0900B', '#C2537A'];
 const splitSheet = { root: $('#splitSheet'), body: $('#splitBody') };
 let splitIncome = null;
 let splitChecked = new Set();
-let splitParts = null;      // { potId: amount } כשהיא שינתה ידנית
+let splitParts = null;      // { potId: amount } כששינתה סכום ידנית
+let splitPcts  = null;      // { potId: percent } כששינתה אחוז להכנסה הזאת
 
 function openSplitSheet(inc) {
   if (!splitSheet.root || !state.pots.length) return false;
   splitIncome = inc;
   splitChecked = new Set(unsettledIn(monthOf(inc.received_on)).map(e => e.id));
   splitParts = null;
+  splitPcts = null;
   drawSplit();
   splitSheet.root.hidden = false;
   return true;
 }
 function closeSplitSheet() {
   if (splitSheet.root) splitSheet.root.hidden = true;
-  splitIncome = null; splitParts = null;
+  splitIncome = null; splitParts = null; splitPcts = null;
 }
 
-/** הסכומים שיוצגו: מה ששינתה ידנית, אחרת החלוקה לפי האחוזים. */
+/** האחוז שמוצג לכל קופה: מה ששינתה להכנסה הזאת, אחרת האחוז הקבוע. */
+const pctOf = pot => splitPcts ? (splitPcts[pot.id] ?? 0) : pot.share;
+
+/**
+ * הסכומים שיוצגו, לפי סדר עדיפות:
+ * סכום ששינתה ידנית ← אחוז ששינתה להכנסה הזאת ← האחוז הקבוע של הקופה.
+ * השארית מהעיגול הולכת לקופה עם האחוז הגדול ביותר, כדי שהסכום יֵצא מדויק.
+ */
 function currentParts(net) {
-  if (splitParts) return potsByPos().map(p => ({ pot: p, amount: splitParts[p.id] ?? 0 }));
-  return splitAmount(net);
+  const pots = potsByPos();
+  if (splitParts) return pots.map(p => ({ pot: p, amount: splitParts[p.id] ?? 0 }));
+  if (!splitPcts) return splitAmount(net);
+
+  const cents = Math.round(net * 100);
+  const parts = pots.map(p => ({ pot: p, cents: Math.floor(cents * pctOf(p) / 100) }));
+  const drift = cents - sum(parts, x => x.cents);
+  const total = sum(pots, p => pctOf(p));
+  if (drift && total === 100 && parts.length) {
+    const biggest = parts.reduce((a, b) => (pctOf(b.pot) > pctOf(a.pot) ? b : a), parts[0]);
+    biggest.cents += drift;
+  }
+  return parts.map(x => ({ pot: x.pot, amount: x.cents / 100 }));
 }
 
 function drawSplit() {
@@ -2355,13 +2375,21 @@ function drawSplit() {
       <span class="settlerow__amount" dir="ltr">−${esc(money(e.amount))}</span>
     </label>`).join('');
 
+  const pctTotal = Math.round(sum(potsByPos(), p => pctOf(p)) * 100) / 100;
+
   const potRows = parts.map(({ pot, amount }) => `
     <div class="splitrow" style="--pot:${esc(pot.colour ?? '#3D74A8')}">
       <span class="splitrow__dot" aria-hidden="true"></span>
       <span class="splitrow__name">${esc(pot.name)}</span>
-      <span class="splitrow__pct">${pot.share}%</span>
+      <label class="splitrow__pctbox">
+        <input class="splitrow__pct" type="number" dir="ltr" min="0" max="100" step="1"
+               inputmode="decimal" data-pct="${pot.id}" value="${pctOf(pot)}"
+               aria-label="אחוז ל${esc(pot.name)}">
+        <span aria-hidden="true">%</span>
+      </label>
       <input class="splitrow__input" type="number" dir="ltr" min="0" step="0.01"
-             inputmode="decimal" data-pot="${pot.id}" value="${amount.toFixed(2)}">
+             inputmode="decimal" data-pot="${pot.id}" value="${amount.toFixed(2)}"
+             aria-label="סכום ל${esc(pot.name)}">
     </div>`).join('');
 
   splitSheet.body.innerHTML = `
@@ -2384,15 +2412,18 @@ function drawSplit() {
     <h3 class="rep__h">בין הקופות</h3>
     <div class="splitlist">${potRows}</div>
 
-    <p class="splitcheck" data-ok="${drift === 0}">
-      ${drift === 0
-        ? 'הסכומים מסתדרים בדיוק ✓'
-        : `${drift > 0 ? 'עוד' : 'יותר מדי'} ${esc(money(Math.abs(drift)))} — צריך להגיע ל-${esc(money(net))}`}
+    <p class="splitcheck" data-ok="${drift === 0 && pctTotal === 100}">
+      ${drift !== 0
+        ? `${drift > 0 ? 'עוד' : 'יותר מדי'} ${esc(money(Math.abs(drift)))} — צריך להגיע ל-${esc(money(net))}`
+        : pctTotal !== 100
+          ? `סך האחוזים ${pctTotal}% — צריך להגיע ל-100%`
+          : 'הסכומים מסתדרים בדיוק ✓'}
+      <button class="splitcheck__undo" id="splitReset" type="button">איפוס לאחוזים הקבועים</button>
     </p>
 
     <div class="btn-row rep__actions">
       <button class="btn btn--primary" id="splitConfirm" type="button" ${drift === 0 && net >= 0 ? '' : 'disabled'}>אישור החלוקה</button>
-      <button class="btn btn--quiet" id="splitReset" type="button">חזרה לאחוזים</button>
+      <button class="btn btn--quiet btn--danger" id="splitCancel" type="button">ביטול ההכנסה</button>
     </div>`;
 
   $$('[data-exp]', splitSheet.body).forEach(cb => cb.addEventListener('change', () => {
@@ -2401,24 +2432,55 @@ function drawSplit() {
     drawSplit();
   }));
 
+  // שינוי אחוז — הסכומים מחושבים מחדש לבד, לכל הקופות
+  $$('[data-pct]', splitSheet.body).forEach(inp => inp.addEventListener('input', () => {
+    splitPcts = Object.fromEntries(
+      $$('[data-pct]', splitSheet.body).map(x => [x.dataset.pct, Number(x.value) || 0]));
+    splitParts = null;                  // האחוזים מנצחים סכום שהוקלד קודם
+    const focused = inp.dataset.pct;
+    drawSplit();
+    // number inputs לא תומכים ב-setSelectionRange, אז רק מחזירים פוקוס
+    $(`[data-pct="${focused}"]`, splitSheet.body)?.focus();
+  }));
+
+  // שינוי סכום ידני — האחוזים מתעדכנים כדי לשקף אותו
   $$('[data-pot]', splitSheet.body).forEach(inp => inp.addEventListener('input', () => {
     splitParts = Object.fromEntries(
       $$('[data-pot]', splitSheet.body).map(x => [x.dataset.pot, Number(x.value) || 0]));
     const nowAllocated = sum(Object.values(splitParts), v => v);
     const d = Math.round((net - nowAllocated) * 100) / 100;
+
+    $$('[data-pct]', splitSheet.body).forEach(x => {
+      const share = net > 0 ? (splitParts[x.dataset.pct] ?? 0) / net * 100 : 0;
+      x.value = String(Math.round(share * 10) / 10);
+    });
+
     const note = $('.splitcheck', splitSheet.body);
     note.dataset.ok = String(d === 0);
-    note.textContent = d === 0
-      ? 'הסכומים מסתדרים בדיוק ✓'
-      : `${d > 0 ? 'עוד' : 'יותר מדי'} ${money(Math.abs(d))} — צריך להגיע ל-${money(net)}`;
+    note.firstChild.nodeValue = d === 0
+      ? 'הסכומים מסתדרים בדיוק ✓ '
+      : `${d > 0 ? 'עוד' : 'יותר מדי'} ${money(Math.abs(d))} — צריך להגיע ל-${money(net)} `;
     $('#splitConfirm', splitSheet.body).disabled = !(d === 0 && net >= 0);
   }));
 
-  $('#splitReset', splitSheet.body).addEventListener('click', () => { splitParts = null; drawSplit(); });
+  $('#splitReset', splitSheet.body)?.addEventListener('click', () => {
+    splitParts = null; splitPcts = null; drawSplit();
+  });
+
+  // ביטול — ההכנסה נמחקת לגמרי, כאילו לא הוקלדה
+  $('#splitCancel', splitSheet.body).addEventListener('click', () => {
+    const id = inc.id;
+    closeSplitSheet();
+    deleteIncome(id);
+    if (walletSheet.root?.hidden === false) renderWallet();
+    if (bankSheet.root?.hidden === false) renderBank();
+    render();
+    toast('ההכנסה בוטלה');
+  });
 
   $('#splitConfirm', splitSheet.body).addEventListener('click', () => {
-    const chosen = splitParts
-      ? potsByPos().map(p => ({ pot: p, amount: splitParts[p.id] ?? 0 })).filter(x => x.amount)
+    const chosen = (splitParts || splitPcts)
+      ? parts.filter(x => x.amount)
       : null;
     const res = applyIncomeSplit(inc, { settledIds: [...splitChecked], parts: chosen });
     closeSplitSheet();
