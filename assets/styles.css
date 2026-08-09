@@ -1530,3 +1530,13 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 
 .chip--wait { background: #FBF0DC; color: #7A5410; }
 .chip--pot  { background: color-mix(in srgb, var(--pot) 14%, #fff); color: var(--pot); }
+
+.donesheet__prev {
+  font-size: 13px; font-weight: 600; color: #7A5410;
+  background: #FBF0DC; padding: 8px var(--s3);
+  border-radius: var(--r-xs); margin-bottom: var(--s3);
+}
+.donesheet__total {
+  font-size: 13.5px; font-weight: 700; color: var(--green-ink);
+  text-align: center; margin-top: 4px;
+}

@@ -115,7 +115,9 @@ function clientHue(name) {
 /** Fill in fields added after a task was first saved, so older rows behave. */
 const normalize = t => ({
   client: null, planned_at: null, started_at: null, finished_at: null, moved_from: null,
+  sessions: [],
   ...t,
+  sessions: (t.sessions ?? []).map(x => ({ on: null, from: null, to: null, mins: 0, ...x })),
   subtasks: (t.subtasks ?? []).map(s => ({ status: null, ...s })),
 });
 
@@ -692,6 +694,53 @@ function setTaskTimes(task, startedIso, finishedIso) {
   touch(task);
 }
 
+/* ------------------------------------------------------------
+   מקטעי עבודה
+   משימה יכולה להתפרס על כמה ימים. כל יום שעבדת עליה נשמר כמקטע
+   נפרד, והזמן הכולל הוא הסכום שלהם — כך שמשימה שהתחילה ביום אחד
+   והסתיימה באחר מציגה את הזמן האמיתי ולא רק את היום האחרון.
+   ------------------------------------------------------------ */
+
+/** המקטע של יום מסוים, אם קיים. */
+const sessionOn = (task, date) => (task.sessions ?? []).find(x => x.on === date) ?? null;
+
+/** סך דקות העבודה על המשימה, מכל הימים. */
+function taskMinutes(task) {
+  const fromSessions = sum(task.sessions ?? [], x => Number(x.mins) || 0);
+  if (fromSessions) return fromSessions;
+  return minutesBetween(task.started_at, task.finished_at) ?? 0;   // רשומות ישנות
+}
+
+/** דקות שנרשמו ביום מסוים — לפי מקטע, ואם אין, לפי הזוג הישן. */
+function minutesOn(task, date) {
+  const one = sessionOn(task, date);
+  if (one) return Number(one.mins) || 0;
+  if (!task.sessions?.length && task.task_date === date) {
+    return minutesBetween(task.started_at, task.finished_at) ?? 0;
+  }
+  return 0;
+}
+
+/**
+ * רושם כמה זמן עבדת על המשימה ביום מסוים. מקטע אחד לכל יום —
+ * רישום חוזר מחליף את הקודם ולא מוסיף עליו.
+ */
+function logSession(task, { on, from, to, mins }) {
+  const m = Math.max(0, Math.round(Number(mins) || 0));
+  const rest = (task.sessions ?? []).filter(x => x.on !== on);
+  task.sessions = m > 0
+    ? [...rest, { on, from: from ?? null, to: to ?? null, mins: m }].sort((a, b) => (a.on ?? '').localeCompare(b.on ?? ''))
+    : rest;
+
+  // שומרים על הזוג הישן מסונכרן, כדי שדוחות וגרסאות קודמות ימשיכו לעבוד
+  const last = task.sessions[task.sessions.length - 1];
+  if (last?.from && last?.to) {
+    task.started_at  = isoAt(last.on, last.from);
+    task.finished_at = isoAt(last.on, last.to);
+  }
+  touch(task);
+}
+
 /** Rewrite `position` from the current visual order of the active list. */
 function applyOrder(ids) {
   ids.forEach((id, i) => {
@@ -1100,13 +1149,18 @@ function taskNode(task) {
     meta.append(t);
   }
 
-  const mins = minutesBetween(task.started_at, task.finished_at);
-  if (task.done && mins != null) {
+  // הצ'יפ מראה את הזמן המצטבר מכל הימים, לא רק מהיום האחרון
+  const mins = taskMinutes(task);
+  if (mins > 0) {
+    const days = task.sessions ?? [];
     const d = document.createElement('span');
     d.className = 'chip chip--dur';
     d.innerHTML = `<span class="chip__icon" aria-hidden="true">${ICON.clock}</span>`;
     d.append(humanDuration(mins));
-    d.title = `${hhmm(task.started_at)}–${hhmm(task.finished_at)}`;
+    d.title = days.length > 1
+      ? days.map(x => `${heDate(x.on)} · ${humanDuration(x.mins)}`).join('\n')
+      : (task.started_at && task.finished_at ? `${hhmm(task.started_at)}–${hhmm(task.finished_at)}` : 'זמן עבודה');
+    if (days.length > 1) d.append(` · ${days.length} ימים`);
     meta.append(d);
   }
 
@@ -1416,6 +1470,13 @@ function openMenu(task, anchor) {
     item('', `<span class="menu__icon">${ICON.cal}</span><span>בחירת תאריך…</span>`,
       () => openDateSheet(task), { role: 'menuitem' });
     sep();
+
+    /* ---- log time without finishing ---- */
+    const logged = minutesOn(task, task.task_date);
+    item('', `<span class="menu__icon">${ICON.clock}</span><span>${
+      logged ? `זמן עבודה היום · ${esc(humanDuration(logged))}` : 'רישום זמן עבודה היום'
+    }</span>`, () => openDoneSheet(task, { mode: 'log', on: task.task_date }), { role: 'menuitem' });
+    sep();
   }
 
   /* ---- delete ---- */
@@ -1450,11 +1511,28 @@ function place(menu, anchor) {
   menu.style.top  = top + 'px';
 }
 
-function doMove(task, date) {
+function moveNow(task, date) {
   const node = $(`.task[data-id="${task.id}"]`);
   moveTask(task, date);
   animateOut(node, () => { render(); pull().then(render); });
   toast(`המשימה הועברה ל${relativeLabel(date)}`);
+}
+
+/**
+ * מעביר משימה ליום אחר. אם כבר עבדת עליה היום, קודם שואלים כמה זמן —
+ * אחרת העבודה של היום הזה הייתה נעלמת מהספירה.
+ */
+function doMove(task, date) {
+  const day = task.task_date;
+  const worked = task.status === 'doing'
+    || (task.subtasks ?? []).some(x => x.done || x.status)
+    || sessionOn(task, day);
+
+  if (worked && !task.done) {
+    openDoneSheet(task, { mode: 'log', on: day, after: () => moveNow(task, date) });
+    return;
+  }
+  moveNow(task, date);
 }
 
 function commitTitle(task, input) {
@@ -1589,22 +1667,54 @@ const doneSheet = {
   dur:   $('#doneDuration'),
   save:  $('#doneSaveBtn'),
   skip:  $('#doneSkipBtn'),
+  hint:  $('#doneHint'),
+  prev:  $('#donePrev'),
+  total: $('#doneTotal'),
 };
 let doneTarget = null;
+let doneMode = 'done';     // 'done' = סיימת אותה · 'log' = רק רושמים זמן ליום הזה
+let doneAfter = null;      // מה לעשות אחרי השמירה (למשל להעביר לתאריך אחר)
 
-function openDoneSheet(task) {
+/**
+ * מסך זמן העבודה. אותו מסך משרת שני מצבים:
+ * סיום משימה, ורישום זמן ליום מסוים לפני שהיא עוברת הלאה.
+ */
+function openDoneSheet(task, { mode = 'done', on = null, after = null } = {}) {
   doneTarget = task;
+  doneMode = mode;
+  doneAfter = after;
+  doneSheet.root.dataset.on = on ?? task.task_date;
   doneSheet.title.textContent = task.title;
 
-  const end = task.finished_at ? new Date(task.finished_at) : new Date();
+  const day = doneSheet.root.dataset.on;
+  const prior = sessionOn(task, day);
+  const elsewhere = (task.sessions ?? []).filter(x => x.on !== day);
+  const before = sum(elsewhere, x => Number(x.mins) || 0);
+
+  doneSheet.hint.textContent = mode === 'log'
+    ? 'כמה זמן עבדת עליה היום? הזמן יצטבר לסך הכולל של המשימה.'
+    : 'מתי התחלת אותה? שעת הסיום נרשמה אוטומטית.';
+
+  if (before) {
+    doneSheet.prev.hidden = false;
+    doneSheet.prev.textContent = `כבר נרשמו ${humanDuration(before)} בימים קודמים`;
+  } else {
+    doneSheet.prev.hidden = true;
+  }
+
+  const end = prior?.to
+    ? new Date(isoAt(day, prior.to))
+    : (mode === 'done' && task.finished_at ? new Date(task.finished_at) : new Date());
   doneSheet.end.value   = hhmm(end);
-  doneSheet.start.value = task.started_at ? hhmm(task.started_at) : (task.planned_at ?? '');
+  doneSheet.start.value = prior?.from
+    ?? (task.started_at && task.task_date === day ? hhmm(task.started_at) : (task.planned_at ?? ''));
 
   doneSheet.quick.replaceChildren(...[15, 30, 60, 120].map(m => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'quick';
-    b.textContent = m < 60 ? `לפני ${m} דק׳` : m === 60 ? 'לפני שעה' : 'לפני שעתיים';
+    b.textContent = m < 60 ? `${m} דק׳` : m === 60 ? 'שעה' : 'שעתיים';
+    b.title = `סימון ${humanDuration(m)} עד ${hhmm(end)}`;
     b.addEventListener('click', () => {
       doneSheet.start.value = hhmm(new Date(end.getTime() - m * 60000));
       updateDuration();
@@ -1619,16 +1729,24 @@ function openDoneSheet(task) {
 
 function updateDuration() {
   if (!doneTarget) return;
-  const s = isoAt(doneTarget.task_date, doneSheet.start.value);
-  const e = isoAt(doneTarget.task_date, doneSheet.end.value);
+  const day = doneSheet.root.dataset.on ?? doneTarget.task_date;
+  const s = isoAt(day, doneSheet.start.value);
+  const e = isoAt(day, doneSheet.end.value);
   const m = minutesBetween(s, e);
-  doneSheet.dur.textContent = m == null ? '' : `משך העבודה: ${humanDuration(m)}`;
+  doneSheet.dur.textContent = m == null ? '' : `משך העבודה היום: ${humanDuration(m)}`;
   doneSheet.dur.hidden = m == null;
+
+  const elsewhere = sum((doneTarget.sessions ?? []).filter(x => x.on !== day), x => Number(x.mins) || 0);
+  const total = elsewhere + (m ?? 0);
+  doneSheet.total.hidden = !(elsewhere && m != null);
+  if (!doneSheet.total.hidden) doneSheet.total.textContent = `סך הכל על המשימה: ${humanDuration(total)}`;
 }
 
 function closeDoneSheet() {
   doneSheet.root.hidden = true;
   doneTarget = null;
+  doneMode = 'done';
+  doneAfter = null;
 }
 
 doneSheet.start.addEventListener('change', updateDuration);
@@ -1637,17 +1755,34 @@ doneSheet.end.addEventListener('change', updateDuration);
 doneSheet.save.addEventListener('click', () => {
   const t = doneTarget;
   if (!t) return closeDoneSheet();
-  const s = isoAt(t.task_date, doneSheet.start.value);
-  const e = isoAt(t.task_date, doneSheet.end.value) ?? new Date().toISOString();
-  setTaskTimes(t, s, e);
-  const m = minutesBetween(s, e);
+  const day = doneSheet.root.dataset.on ?? t.task_date;
+  const after = doneAfter;
+
+  const from = doneSheet.start.value;
+  const to   = doneSheet.end.value || hhmm(new Date());
+  const m = minutesBetween(isoAt(day, from), isoAt(day, to));
+
+  if (m != null) logSession(t, { on: day, from, to, mins: m });
+  else if (doneMode === 'done') setTaskTimes(t, null, new Date().toISOString());
+
   closeDoneSheet();
+  after?.();
   render();
-  toast(m == null ? 'נשמר' : `נרשמו ${humanDuration(m)} על המשימה`);
+  toast(m == null ? 'נשמר' : `נרשמו ${humanDuration(m)} · סך הכל ${humanDuration(taskMinutes(t))}`);
 });
 
-doneSheet.skip.addEventListener('click', () => { closeDoneSheet(); render(); });
-$$('[data-done-close]').forEach(b => b.addEventListener('click', () => { closeDoneSheet(); render(); }));
+doneSheet.skip.addEventListener('click', () => {
+  const after = doneAfter;
+  closeDoneSheet();
+  after?.();
+  render();
+});
+$$('[data-done-close]').forEach(b => b.addEventListener('click', () => {
+  const after = doneAfter;
+  closeDoneSheet();
+  after?.();
+  render();
+}));
 
 /* ============================================================
    RESCHEDULE SHEET
@@ -2891,12 +3026,16 @@ function splitBar(parts) {
 /** Minutes of tracked work per hour of the day. */
 function hourlyLoad(timed) {
   const bins = Array.from({ length: 24 }, () => 0);
-  for (const { t } of timed) {
-    const a = new Date(t.started_at), b = new Date(t.finished_at);
-    for (let h = a.getHours(); h <= b.getHours() && h < 24; h++) {
-      const from = Math.max(a.getTime(), new Date(a).setHours(h, 0, 0, 0));
-      const to   = Math.min(b.getTime(), new Date(a).setHours(h, 59, 59, 999));
-      bins[h] += Math.max(0, Math.round((to - from) / 60000));
+  for (const x of timed) {
+    if (!x.from || !x.to) continue;
+    const [h1, m1] = x.from.split(':').map(Number);
+    const [h2, m2] = x.to.split(':').map(Number);
+    const a = h1 * 60 + m1, b = h2 * 60 + m2;
+    if (!(b > a)) continue;
+    for (let h = h1; h <= h2 && h < 24; h++) {
+      const from = Math.max(a, h * 60);
+      const to   = Math.min(b, h * 60 + 60);
+      bins[h] += Math.max(0, to - from);
     }
   }
   return bins;
@@ -2925,21 +3064,32 @@ function reportData(date) {
   const done = rows.filter(t => t.done);
   const open = rows.filter(t => !t.done);
 
-  const timed = done
-    .map(t => ({ t, mins: minutesBetween(t.started_at, t.finished_at) }))
-    .filter(x => x.mins != null);
+  // זמן העבודה של היום נספר לפי מקטעים, לא לפי המשימות שיושבות על התאריך —
+  // כך משימה שעבדת עליה היום ודחית למחר עדיין נספרת ביום שבו באמת עבדת.
+  const timed = state.tasks
+    .map(t => {
+      const one = sessionOn(t, date);
+      const mins = minutesOn(t, date);
+      return {
+        t, mins,
+        from: one?.from ?? (t.started_at && !t.sessions?.length ? hhmm(t.started_at) : null),
+        to:   one?.to   ?? (t.finished_at && !t.sessions?.length ? hhmm(t.finished_at) : null),
+      };
+    })
+    .filter(x => x.mins > 0);
   const totalMins = timed.reduce((n, x) => n + x.mins, 0);
 
   const byClient = new Map();
-  rows.forEach(t => {
+  const bump = t => {
     const key = t.client ?? NO_CLIENT;
-    const c = byClient.get(key) ?? { name: key, total: 0, done: 0, mins: 0 };
+    return byClient.get(key) ?? byClient.set(key, { name: key, total: 0, done: 0, mins: 0 }).get(key);
+  };
+  rows.forEach(t => {
+    const c = bump(t);
     c.total++;
     if (t.done) c.done++;
-    const m = minutesBetween(t.started_at, t.finished_at);
-    if (m != null) c.mins += m;
-    byClient.set(key, c);
   });
+  timed.forEach(x => { bump(x.t).mins += x.mins; });
 
   return {
     rows, done, open, timed, totalMins,
@@ -2966,8 +3116,12 @@ async function loadMonthTasks(ym) {
 
 function monthData(ym, rows) {
   const done  = rows.filter(t => t.done);
-  const timed = rows.map(t => ({ t, mins: minutesBetween(t.started_at, t.finished_at) }))
-                    .filter(x => x.mins != null);
+  const minsInMonth = t => {
+    const inside = (t.sessions ?? []).filter(x => (x.on ?? '').slice(0, 7) === ym);
+    if (inside.length) return sum(inside, x => Number(x.mins) || 0);
+    return minutesBetween(t.started_at, t.finished_at) ?? 0;
+  };
+  const timed = rows.map(t => ({ t, mins: minsInMonth(t) })).filter(x => x.mins > 0);
 
   const byClient = new Map();
   const bump = (name, patch) => {
@@ -2975,10 +3129,7 @@ function monthData(ym, rows) {
     Object.entries(patch).forEach(([k, v]) => { c[k] += v; });
     byClient.set(name, c);
   };
-  rows.forEach(t => {
-    const m = minutesBetween(t.started_at, t.finished_at);
-    bump(t.client ?? NO_CLIENT, { total: 1, done: t.done ? 1 : 0, mins: m ?? 0 });
-  });
+  rows.forEach(t => bump(t.client ?? NO_CLIENT, { total: 1, done: t.done ? 1 : 0, mins: minsInMonth(t) }));
 
   const allSpend = expensesIn(ym);
   const spend    = allSpend.filter(isMine);          // מה שבאמת יצא מהכיס שלך
@@ -3076,11 +3227,14 @@ function drawDayReport() {
     .join('');
 
   const timeline = d.timed.length ? d.timed
-    .sort((a, b) => (a.t.finished_at ?? '').localeCompare(b.t.finished_at ?? ''))
+    .slice()
+    .sort((a, b) => (a.to ?? '').localeCompare(b.to ?? ''))
     .map(x => `
       <li class="rep__row">
-        <span class="rep__time" dir="ltr">${hhmm(x.t.started_at)}–${hhmm(x.t.finished_at)}</span>
-        <span class="rep__task">${esc(x.t.title)}</span>
+        <span class="rep__time" dir="ltr">${x.from && x.to ? `${esc(x.from)}–${esc(x.to)}` : '—'}</span>
+        <span class="rep__task">${esc(x.t.title)}${
+          x.t.task_date !== state.date ? '<span class="exprow__sub"> · ממשיכה ביום אחר</span>' : ''
+        }</span>
         <span class="rep__dur">${esc(humanDuration(x.mins))}</span>
       </li>`).join('') : '';
 
@@ -3359,7 +3513,7 @@ function dayReportText(d, spend, spendTotal, pushed = []) {
   }
   if (d.timed.length) {
     lines.push('', 'מה נעשה:');
-    d.timed.forEach(x => lines.push(`· ${hhmm(x.t.started_at)}–${hhmm(x.t.finished_at)} ${x.t.title} (${humanDuration(x.mins)})`));
+    d.timed.forEach(x => lines.push(`· ${x.from ?? ''}–${x.to ?? ''} ${x.t.title} (${humanDuration(x.mins)})`));
   }
   if (spend.length) {
     lines.push('', 'הוצאות:');
@@ -3411,7 +3565,7 @@ $('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMon
    CLOUD  (Supabase)
    ============================================================ */
 const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
-             'client,planned_at,started_at,finished_at,moved_from,created_at,updated_at';
+             'client,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -3428,6 +3582,7 @@ const toRow = t => ({
   planned_at: t.planned_at ?? null,
   started_at: t.started_at ?? null,
   finished_at: t.finished_at ?? null,
+  sessions: t.sessions ?? [],
   moved_from: t.moved_from ?? null,
   created_at: t.created_at,
   updated_at: t.updated_at,
@@ -3763,7 +3918,7 @@ function explain(err) {
   if (m.includes('already registered'))     return 'החשבון כבר קיים — אפשר להתחבר.';
   if (m.includes('relation') && m.includes('does not exist'))
                                             return 'טבלת tasks חסרה. הריצי את supabase/schema.sql ב-SQL Editor.';
-  if (m.includes('column') && /status|client|planned_at|started_at|finished_at/.test(m))
+  if (m.includes('column') && /status|client|planned_at|started_at|finished_at|sessions/.test(m))
                                             return 'חסרה עמודה בטבלה. הריצי שוב את supabase/schema.sql ב-SQL Editor.';
   if (m.includes('password'))               return 'הסיסמה חייבת להכיל לפחות 6 תווים.';
   return err?.message ?? 'משהו השתבש.';
