@@ -260,7 +260,9 @@
 
     <div class="sheet__body">
       <p class="donesheet__task" id="doneSheetTask"></p>
-      <p class="sheet__hint">מתי התחלת אותה? שעת הסיום נרשמה אוטומטית.</p>
+      <p class="sheet__hint" id="doneHint">מתי התחלת אותה? שעת הסיום נרשמה אוטומטית.</p>
+
+      <p class="donesheet__prev" id="donePrev" hidden></p>
 
       <div class="quickrow" id="doneQuick"></div>
 
@@ -276,6 +278,7 @@
       </div>
 
       <p class="donesheet__dur" id="doneDuration"></p>
+      <p class="donesheet__total" id="doneTotal" hidden></p>
 
       <div class="btn-row">
         <button class="btn btn--primary" id="doneSaveBtn" type="button">שמירה</button>
