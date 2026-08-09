@@ -84,10 +84,40 @@ async function all(path: string, token: string, params: Record<string, string> =
 
 const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0);
 
+/**
+ * מוודא שמי שקורא לפונקציה הוא באמת את, ולא סתם מישהו שהשיג את
+ * מפתח ה-anon (שהוא ציבורי). בלי הבדיקה הזאת כל אחד היה יכול
+ * לקרוא את נתוני הבנק שלך.
+ */
+async function requireUser(req: Request) {
+  const auth = req.headers.get('Authorization') ?? '';
+  const jwt = auth.replace(/^Bearer\s+/i, '').trim();
+  if (!jwt) throw new Error('חסר טוקן התחברות');
+
+  const base = Deno.env.get('SUPABASE_URL');
+  const anon = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!base || !anon) throw new Error('חסרים SUPABASE_URL / SUPABASE_ANON_KEY');
+
+  const res = await fetch(`${base}/auth/v1/user`, {
+    headers: { apikey: anon, Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) throw new Error('צריך להתחבר כדי לראות את הנתונים');
+
+  const user = await res.json();
+  if (!user?.id) throw new Error('צריך להתחבר כדי לראות את הנתונים');
+
+  // אם הוגדר משתמש מורשה מפורש — רק הוא עובר
+  const allowed = Deno.env.get('ALLOWED_USER_ID');
+  if (allowed && user.id !== allowed) throw new Error('אין הרשאה');
+
+  return user;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
   try {
+    await requireUser(req);
     const token = await getToken();
 
     const since = new URL(req.url).searchParams.get('since')
@@ -179,6 +209,8 @@ Deno.serve(async (req) => {
       cards_total: cards.reduce((n, a) => n + Math.abs(a.balance), 0),
     });
   } catch (err) {
-    return json({ ok: false, error: String(err instanceof Error ? err.message : err) }, 500);
+    const msg = String(err instanceof Error ? err.message : err);
+    const unauthorised = /טוקן|להתחבר|הרשאה/.test(msg);
+    return json({ ok: false, error: msg }, unauthorised ? 401 : 500);
   }
 });
