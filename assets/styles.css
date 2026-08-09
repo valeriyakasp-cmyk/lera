@@ -1540,3 +1540,70 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   font-size: 13.5px; font-weight: 700; color: var(--green-ink);
   text-align: center; margin-top: 4px;
 }
+
+/* ---------- עדכון מהבנק ---------- */
+.banksync {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); flex-wrap: wrap;
+  margin-top: var(--s3); padding: var(--s3) var(--s4);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.banksync__facts {
+  display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4);
+  font-size: 13px; color: var(--ink-2);
+}
+.banksync__facts b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.banksync__drift b { color: var(--red-ink, #B4342B); }
+.banksync__ok { color: var(--green-ink); font-weight: 600; }
+.banksync__note { font-size: 12.5px; color: var(--ink-3, var(--ink-2)); line-height: 1.6; margin: var(--s3) 0 0; }
+.banksync__err {
+  font-size: 13px; font-weight: 600; color: var(--red-ink, #B4342B);
+  margin: var(--s3) 0 0;
+}
+.banksync__head {
+  display: flex; align-items: center; gap: var(--s3);
+  margin-bottom: var(--s3);
+}
+.banksync__title { font-size: 15px; font-weight: 700; }
+.banksync__go { width: 100%; margin-top: var(--s4); }
+
+.syncsum {
+  display: grid; gap: var(--s2);
+  padding: var(--s4); border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-2, var(--surface));
+}
+.syncsum div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+.syncsum span { font-size: 13px; color: var(--ink-2); }
+.syncsum b { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.syncsum__free { border-top: 1px solid var(--line); padding-top: var(--s2); }
+.syncsum__free b { color: var(--green-ink); }
+
+.syncrows { display: grid; gap: var(--s2); }
+.syncrow {
+  padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.syncrow__top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+.syncrow__title { font-size: 14px; font-weight: 600; }
+.syncrow__amount { font-variant-numeric: tabular-nums; font-weight: 700; }
+.syncrow.is-income .syncrow__amount { color: var(--green-ink); }
+.syncrow__meta { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.syncrow__ctl { display: flex; gap: var(--s2); margin-top: var(--s2); }
+.syncrow__ctl select {
+  flex: 1; min-width: 0; font: inherit; font-size: 13px;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-xs);
+  background: var(--surface); color: var(--ink);
+}
+.syncrow__ctl select:disabled { opacity: .45; }
+
+.syncprev { display: grid; gap: var(--s2); }
+.syncprev__row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-size: 14px;
+}
+.syncprev__row > span:first-child { display: flex; align-items: center; gap: var(--s2); }
+.syncprev__nums { display: flex; align-items: baseline; gap: var(--s3); font-variant-numeric: tabular-nums; }
+.syncprev__nums s { color: var(--ink-2); font-size: 13px; }
+.syncprev__nums b { font-weight: 700; }

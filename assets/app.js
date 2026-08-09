@@ -16,6 +16,8 @@ const LS = {
   pots:     'pots.v1',
   txns:     'txns.v1',
   goals:    'goals.v1',
+  bank:     'bank.v1',       // התמונה האחרונה שנמשכה מהבנק
+  bankmap:  'bankmap.v1',    // איך סווגה כל תנועה: הכנסה, הוצאה או החזר
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -139,6 +141,8 @@ const state = {
   txns:     read(LS.txns, []),
   goals:    read(LS.goals, []),
   queue:    read(LS.queue, []),
+  bank:     read(LS.bank, null),
+  bankmap:  read(LS.bankmap, {}),
   cfg:      read(LS.cfg, { url: '', key: '' }),
   ui:       read(LS.ui, { doneOpen: true }),
   user:     null,
@@ -156,6 +160,7 @@ const persist = () => {
   write(LS.txns, state.txns);
   write(LS.goals, state.goals);
   write(LS.queue, state.queue);
+  write(LS.bankmap, state.bankmap);
 };
 
 /* ---------- money ---------- */
@@ -575,6 +580,184 @@ function seedOpening(allocations, on = isoDate()) {
     if (!amount) return;
     addTxn({ pot_id, amount, happened_on: on, kind: 'opening', title: 'יתרת פתיחה' });
   });
+}
+
+/* ============================================================
+   הבנק כמקור אמת
+   ------------------------------------------------------------
+   העיקרון: היתרה בעו״ש היא עובדה, והקופות רק מחלקות אותה ביניהן.
+   לכן סכום הקופות שווה תמיד בדיוק ליתרה בבנק — אין מספר שהומצא.
+
+   חיובי אשראי שעוד לא ירדו מוצגים בנפרד כ*הערכה*, ולא נכנסים
+   ליומן: מחזורי החיוב של חברות האשראי בישראל לא מתפרסמים ב-API,
+   אז כל ניסיון לחשב אותם בדיוק היה ניחוש שמתחזה לעובדה.
+   ============================================================ */
+
+const isCheckingAcc = a => !a.type || a.type === 'CHECKING';
+
+/** ההקצאה החד-פעמית של יתרת הפתיחה, כפי שנקבעה: 90 / 5 / 5. */
+const OPENING_SHARES = [90, 5, 5];
+
+/** היתרה בעו״ש לפי הבנק, או null אם עוד לא נמשכה תמונה. */
+const bankChecking = () => {
+  const b = state.bank;
+  if (!b) return null;
+  if (typeof b.checking_total === 'number') return b.checking_total;
+  return sum((b.accounts ?? []).filter(isCheckingAcc), a => Number(a.balance) || 0);
+};
+
+/** הערכה של חיובי האשראי שעוד לא ירדו. הערכה, לא עובדה. */
+const bankPending = () => {
+  const b = state.bank;
+  if (!b) return 0;
+  return Math.round(sum(b.upcoming ?? [], u => (u.source === 'card' ? Number(u.amount) || 0 : 0)) * 100) / 100;
+};
+
+/** התאריך שממנו בונים מחדש — יום החיוב האחרון, כי הוא גבול טבעי. */
+function bankAnchor() {
+  const b = state.bank;
+  const dates = (b?.upcoming ?? []).map(u => u.since).filter(Boolean).sort();
+  return dates[dates.length - 1] ?? monthOf() + '-01';
+}
+
+/** תנועות העו״ש מאז נקודת העיגון, מהישנה לחדשה. */
+function bankMoves() {
+  const b = state.bank;
+  if (!b) return [];
+  const ids = new Set((b.accounts ?? []).filter(isCheckingAcc).map(a => a.id));
+  const from = bankAnchor();
+  return (b.transactions ?? [])
+    .filter(t => ids.has(t.account_id) && t.happened_on > from && t.amount)
+    .sort((x, y) => String(x.happened_on).localeCompare(String(y.happened_on)));
+}
+
+const bankLabel = t => {
+  const raw = t.description ?? t.merchant ?? '';
+  const txt = (typeof raw === 'string' ? raw : raw?.description ?? '').trim();
+  return txt || (t.amount > 0 ? 'הפקדה' : 'חיוב');
+};
+
+/** ברירת מחדל: כסף שנכנס הוא הכנסה, כסף שיוצא הוא הוצאה מהבזבוזים. */
+function bankDefault(t) {
+  return t.amount > 0
+    ? { as: 'income', pot_id: null }
+    : { as: 'expense', pot_id: funPot()?.id ?? null };
+}
+
+const bankRule = t => ({ ...bankDefault(t), ...(state.bankmap[t.id] ?? {}) });
+
+function setBankRule(id, patch) {
+  state.bankmap[id] = { ...(state.bankmap[id] ?? {}), ...patch };
+  write(LS.bankmap, state.bankmap);
+}
+
+/**
+ * מחשב את היומן שייבנה — בלי לגעת בנתונים.
+ * מחזיר גם את היתרה שתהיה לכל קופה, כדי להראות תצוגה מקדימה.
+ */
+function bankPlan() {
+  const total = bankChecking();
+  if (total == null) return null;
+
+  const moves = bankMoves();
+  const net = Math.round(sum(moves, t => t.amount) * 100) / 100;
+  const opening = Math.round((total - net) * 100) / 100;
+
+  const pots = potsByPos();
+  const bal = new Map(pots.map(p => [p.id, 0]));
+  const add = (potId, amount) => {
+    if (!potId || !bal.has(potId)) return;
+    bal.set(potId, Math.round((bal.get(potId) + amount) * 100) / 100);
+  };
+
+  /* יתרת הפתיחה מתחלקת לפי ההקצאה החד-פעמית שנקבעה בהתחלה */
+  const seed = OPENING_SHARES.length === pots.length ? OPENING_SHARES : pots.map(p => p.share);
+  const seedSum = sum(seed, x => x) || 100;
+  let left = Math.round(opening * 100);
+  pots.forEach((p, i) => {
+    const cents = i === pots.length - 1 ? left : Math.floor(Math.round(opening * 100) * seed[i] / seedSum);
+    left -= cents;
+    add(p.id, cents / 100);
+  });
+
+  const rows = moves.map(t => {
+    const rule = bankRule(t);
+    const row = { txn: t, ...rule, parts: [] };
+    if (rule.as === 'income' && t.amount > 0) {
+      row.parts = splitAmount(t.amount);
+      row.parts.forEach(x => add(x.pot.id, x.amount));
+    } else if (rule.as === 'skip') {
+      /* החזר או העברה — לא מתחלק, אבל הכסף עדיין בחשבון וחייב לשבת בקופה */
+      row.pot_id = rule.pot_id ?? pots[0]?.id ?? null;
+      add(row.pot_id, t.amount);
+    } else {
+      const pot = rule.pot_id ?? (t.amount > 0 ? pots[0]?.id : funPot()?.id);
+      row.pot_id = pot;
+      add(pot, t.amount);
+    }
+    return row;
+  });
+
+  return {
+    total, opening, net, rows,
+    anchor: bankAnchor(),
+    pending: bankPending(),
+    pots: pots.map(p => ({ pot: p, before: potBalance(p.id), after: bal.get(p.id) ?? 0 })),
+  };
+}
+
+/** בונה את היומן מחדש לפי התוכנית. מוחק את הישן — הבנק הוא האמת. */
+function applyBankPlan(plan) {
+  if (!plan) return;
+  state.txns.slice().forEach(t => deleteTxn(t.id));
+
+  const pots = potsByPos();
+  const seed = OPENING_SHARES.length === pots.length ? OPENING_SHARES : pots.map(p => p.share);
+  const seedSum = sum(seed, x => x) || 100;
+  let left = Math.round(plan.opening * 100);
+  pots.forEach((p, i) => {
+    const cents = i === pots.length - 1 ? left : Math.floor(Math.round(plan.opening * 100) * seed[i] / seedSum);
+    left -= cents;
+    if (cents) addTxn({ pot_id: p.id, amount: cents / 100, happened_on: plan.anchor, kind: 'opening', title: 'יתרה בבנק' });
+  });
+
+  plan.rows.forEach(row => {
+    const t = row.txn;
+    const title = bankLabel(t);
+    if (row.as === 'income' && t.amount > 0) {
+      row.parts.forEach(({ pot, amount }) => addTxn({
+        pot_id: pot.id, amount, happened_on: t.happened_on,
+        kind: 'split', title, source_id: t.id, note: 'מהבנק',
+      }));
+    } else {
+      addTxn({
+        pot_id: row.pot_id, amount: t.amount, happened_on: t.happened_on,
+        kind: row.as === 'skip' ? 'transfer' : t.amount > 0 ? 'deposit' : 'expense',
+        title, source_id: t.id, note: 'מהבנק',
+      });
+    }
+  });
+
+  /* ההוצאות הידניות הופכות לרשימת מעקב בלבד — הבנק כבר גובה אותן */
+  state.expenses.forEach(e => {
+    if ((e.spend_date ?? '') > plan.anchor && !e.settled_by) {
+      e.settled_by = 'bank';
+      touchRow('expenses', e);
+    }
+  });
+
+  persist();
+}
+
+/** מושך תמונה עדכנית מהבנק דרך הפונקציה המאובטחת בשרת. */
+async function fetchBank() {
+  if (!state.sb || !state.user) throw new Error('צריך להתחבר לחשבון כדי למשוך מהבנק');
+  const { data, error } = await state.sb.functions.invoke('financy-sync');
+  if (error) throw new Error('לא הצלחתי להתחבר לבנק');
+  if (!data?.ok) throw new Error(data?.error ?? 'לא הצלחתי למשוך את הנתונים');
+  state.bank = data;
+  write(LS.bank, data);
+  return data;
 }
 
 /* ---------- יעדי חיסכון ---------- */
@@ -2093,15 +2276,126 @@ function renderWallet() {
    ============================================================ */
 const bankSheet = { root: $('#bankSheet'), body: $('#bankBody') };
 let bankPotId = null;
+let bankView = 'pots';   // pots | sync
 
 function openBank() {
   if (!bankSheet.root) return;
   if (!state.pots.length) DEFAULT_POTS.forEach((d, i) => addPot({ ...d, position: i }));
   if (!potById(bankPotId)) bankPotId = potsByPos()[0]?.id ?? null;
+  bankView = 'pots';
   renderBank();
   bankSheet.root.hidden = false;
 }
 function closeBank() { if (bankSheet.root) bankSheet.root.hidden = true; }
+
+/* ---------- מסך העדכון מהבנק ---------- */
+
+async function openBankSync() {
+  bankView = 'sync';
+  bankSyncError = '';
+  renderBank();
+  try {
+    await fetchBank();
+  } catch (err) {
+    bankSyncError = err.message;
+  }
+  if (bankSheet.root?.hidden === false && bankView === 'sync') renderBank();
+}
+
+let bankSyncError = '';
+
+const AS_LABEL = { income: 'הכנסה', expense: 'הוצאה', skip: 'החזר / העברה' };
+
+function renderBankSync() {
+  const b = bankSheet.body;
+  const plan = bankPlan();
+
+  if (!plan) {
+    b.innerHTML = `
+      <div class="banksync__head">
+        <button class="btn btn--quiet" id="bankBack" type="button">חזרה</button>
+      </div>
+      <p class="wallet__empty">${esc(bankSyncError || 'מושך נתונים מהבנק…')}</p>`;
+    $('#bankBack', b).addEventListener('click', () => { bankView = 'pots'; renderBank(); });
+    return;
+  }
+
+  const potOpts = (sel) => potsByPos()
+    .map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+
+  const rows = plan.rows.map(r => `
+    <div class="syncrow${r.txn.amount >= 0 ? ' is-income' : ''}" data-txn="${esc(r.txn.id)}">
+      <div class="syncrow__top">
+        <span class="syncrow__title">${esc(bankLabel(r.txn))}</span>
+        <b class="syncrow__amount" dir="ltr">${esc(money(r.txn.amount))}</b>
+      </div>
+      <div class="syncrow__meta">${esc(r.txn.happened_on)}</div>
+      <div class="syncrow__ctl">
+        <select class="syncrow__as" aria-label="סיווג">
+          ${['income', 'expense', 'skip'].map(k =>
+            `<option value="${k}"${r.as === k ? ' selected' : ''}>${AS_LABEL[k]}</option>`).join('')}
+        </select>
+        <select class="syncrow__pot" aria-label="קופה"${r.as === 'income' ? ' disabled' : ''}>
+          ${potOpts(r.pot_id)}
+        </select>
+      </div>
+    </div>`).join('');
+
+  const preview = plan.pots.map(x => `
+    <div class="syncprev__row">
+      <span><i class="pottile__dot" style="background:${esc(x.pot.colour ?? '#3D74A8')}"></i>${esc(x.pot.name)}</span>
+      <span class="syncprev__nums">
+        <s dir="ltr">${esc(money(x.before))}</s>
+        <b dir="ltr">${esc(money(x.after))}</b>
+      </span>
+    </div>`).join('');
+
+  b.innerHTML = `
+    <div class="banksync__head">
+      <button class="btn btn--quiet" id="bankBack" type="button">חזרה</button>
+      <span class="banksync__title">עדכון מהבנק</span>
+    </div>
+
+    ${bankSyncError ? `<p class="banksync__note">${esc(bankSyncError)} — מוצגת התמונה האחרונה שנשמרה.</p>` : ''}
+
+    <div class="syncsum">
+      <div><span>יתרה בבנק</span><b dir="ltr">${esc(money(plan.total))}</b></div>
+      <div><span>נקודת פתיחה · ${esc(plan.anchor)}</span><b dir="ltr">${esc(money(plan.opening))}</b></div>
+      ${plan.pending ? `<div><span>אשראי שטרם ירד · הערכה</span><b dir="ltr">${esc(money(plan.pending))}</b></div>
+      <div class="syncsum__free"><span>פנוי אחרי האשראי</span><b dir="ltr">${esc(money(Math.round((plan.total - plan.pending) * 100) / 100))}</b></div>` : ''}
+    </div>
+
+    <p class="banksync__note">יתרת הפתיחה מתחלקת ${OPENING_SHARES.join(' / ')} כפי שנקבע פעם אחת. כל תנועה מאז מסווגת כאן, וסכום הקופות תמיד יוצא בדיוק היתרה שבבנק.</p>
+
+    <h3 class="rep__h">תנועות מאז ${esc(plan.anchor)}</h3>
+    <div class="syncrows">${rows || '<p class="wallet__empty">אין תנועות חדשות.</p>'}</div>
+
+    <h3 class="rep__h">איך ייראו הקופות</h3>
+    <div class="syncprev">${preview}</div>
+
+    <button class="btn btn--pot banksync__go" id="bankApply" type="button">בנייה מחדש לפי הבנק</button>`;
+
+  $('#bankBack', b).addEventListener('click', () => { bankView = 'pots'; renderBank(); });
+
+  $$('.syncrow', b).forEach(row => {
+    const id = row.dataset.txn;
+    $('.syncrow__as', row).addEventListener('change', e => {
+      setBankRule(id, { as: e.target.value });
+      renderBank();
+    });
+    $('.syncrow__pot', row).addEventListener('change', e => {
+      setBankRule(id, { pot_id: e.target.value });
+      renderBank();
+    });
+  });
+
+  $('#bankApply', b).addEventListener('click', () => {
+    applyBankPlan(bankPlan());
+    bankView = 'pots';
+    renderBank();
+    renderWallet();
+  });
+}
 
 /** מספר שמתגלגל מערך לערך — נעים לעין וגם מראה לאן הכסף זז. */
 function rollNumber(node, from, to, ms = 700) {
@@ -2139,11 +2433,15 @@ function coinDrop(anchor) {
 }
 
 function renderBank() {
+  if (bankView === 'sync') return renderBankSync();
   const pots = potsByPos();
   const total = accountTotal();
   const active = potById(bankPotId) ?? pots[0] ?? null;
   bankPotId = active?.id ?? null;
   const b = bankSheet.body;
+  const real = bankChecking();
+  const pending = bankPending();
+  const drift = real == null ? 0 : Math.round((real - total) * 100) / 100;
 
   const tiles = pots.map(p => `
     <div class="pottile">
@@ -2169,6 +2467,18 @@ function renderBank() {
         סה״כ בעו״ש
       </span>
       <b dir="ltr" id="bankTotal">${esc(money(total))}</b>
+    </div>
+
+    <div class="banksync">
+      ${real == null
+        ? '<p class="banksync__note">עוד לא נמשכו נתונים מהבנק.</p>'
+        : `<div class="banksync__facts">
+             <span>בבנק עכשיו <b dir="ltr">${esc(money(real))}</b></span>
+             ${pending ? `<span>אשראי שטרם ירד (הערכה) <b dir="ltr">${esc(money(pending))}</b></span>` : ''}
+             ${drift ? `<span class="banksync__drift">פער מול הקופות <b dir="ltr">${esc(money(drift))}</b></span>`
+                     : '<span class="banksync__ok">הקופות תואמות לבנק</span>'}
+           </div>`}
+      <button class="btn btn--quiet" id="bankSyncBtn" type="button">עדכון מהבנק</button>
     </div>
 
     ${pots.length ? `<div class="potpills">${pills}</div>` : ''}
@@ -2200,6 +2510,7 @@ function renderBank() {
 
   $$('.potpill', b).forEach(x => x.addEventListener('click', () => { bankPotId = x.dataset.pot; renderBank(); }));
   $('#potAdd', b).addEventListener('click', () => openPotSheet(null));
+  $('#bankSyncBtn', b).addEventListener('click', openBankSync);
   if (!active) return;
 
   $('#potEdit', b).addEventListener('click', () => openPotSheet(active));
