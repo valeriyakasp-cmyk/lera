@@ -1607,3 +1607,47 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .syncprev__nums { display: flex; align-items: baseline; gap: var(--s3); font-variant-numeric: tabular-nums; }
 .syncprev__nums s { color: var(--ink-2); font-size: 13px; }
 .syncprev__nums b { font-weight: 700; }
+
+/* ---------- סיווג עסקאות ---------- */
+.catchip {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.7;
+  border: 1px solid transparent;
+}
+.catchip--biz { background: #E8F0F8; color: #1F5C8B; border-color: #CFE0EE; }
+.catchip--fun { background: #E9F5EE; color: #0B6E45; border-color: #CDE8DA; }
+
+.syncrow__meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  font-size: 12px; color: var(--ink-2); margin-top: 3px;
+}
+.syncrow__where { color: var(--ink-2); }
+.syncrow__where::before { content: '·'; margin-inline-end: 6px; }
+.syncrow__pot {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 1px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600;
+  color: var(--pot); border: 1px solid color-mix(in srgb, var(--pot) 35%, transparent);
+  background: color-mix(in srgb, var(--pot) 8%, transparent);
+}
+.syncrow__hint { flex: 1; font-size: 12.5px; color: var(--ink-2); align-self: center; }
+
+.syncsum__minus b { color: var(--ink-2); }
+
+.owedrows { display: grid; gap: var(--s2); }
+.owedrow {
+  display: flex; align-items: center; gap: var(--s3); width: 100%;
+  padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); font: inherit; text-align: start; cursor: pointer;
+}
+.owedrow.is-owed { border-color: var(--green-ink); background: color-mix(in srgb, var(--green-ink) 6%, transparent); }
+.owedrow__mark {
+  width: 20px; height: 20px; flex: none; display: grid; place-items: center;
+  border: 1.5px solid var(--line); border-radius: 6px;
+  font-size: 12px; font-weight: 700; color: var(--green-ink);
+}
+.owedrow.is-owed .owedrow__mark { border-color: var(--green-ink); }
+.owedrow__title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.owedrow__meta { display: block; font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.owedrow b { font-variant-numeric: tabular-nums; }
