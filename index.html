@@ -37,12 +37,6 @@
             <span class="sync-chip__dot" aria-hidden="true"></span>
             <span class="sync-chip__text">מקומי</span>
           </button>
-          <button id="bankBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="פיננסים — קופות ויתרות">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.2 21 8H3l9-4.8z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M5.5 11v6M10 11v6M14 11v6M18.5 11v6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M3 20h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
-          <button id="walletBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="הארנק — כסף שנכנס, מנויים והוצאות">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 8.5A2.5 2.5 0 016 6h11.5A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19H6a2.5 2.5 0 01-2.5-2.5v-8z" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="14.5" r="1.3" fill="currentColor"/></svg>
-          </button>
           <button id="reportBtn" class="icon-btn icon-btn--ghost" type="button" aria-label="דוח היום">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>
           </button>
@@ -55,6 +49,11 @@
       <div class="hero__body">
         <p class="hero__eyebrow" id="heroEyebrow">יום ראשון</p>
         <h1 class="hero__title" id="heroTitle">בוקר טוב</h1>
+
+        <div class="modetabs" role="tablist" aria-label="מעבר בין תצוגות">
+          <button class="modetab is-on" id="modeDay" type="button" role="tab" aria-selected="true">היום</button>
+          <button class="modetab" id="modeMoney" type="button" role="tab" aria-selected="false">ניהול פיננסי</button>
+        </div>
 
         <div class="datenav" role="group" aria-label="ניווט בין תאריכים">
           <button id="prevDay" class="datenav__arrow" type="button" aria-label="היום הקודם">
@@ -92,6 +91,20 @@
 
     <!-- ═══════════ CONTENT ═══════════ -->
     <main class="content" id="main">
+
+      <section class="money" id="moneyPage" hidden>
+        <div class="monthnav" id="moneyMonth">
+          <button class="datenav__arrow" id="mPrev" type="button" aria-label="חודש קודם">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="monthnav__label" id="mLabel"></span>
+          <button class="datenav__arrow" id="mNext" type="button" aria-label="חודש הבא">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <nav class="moneynav" id="moneyNav" role="tablist" aria-label="חלקי הניהול הפיננסי"></nav>
+        <div id="moneyPane"></div>
+      </section>
 
       <form class="composer" id="addForm" autocomplete="off">
         <span class="composer__icon" aria-hidden="true">
