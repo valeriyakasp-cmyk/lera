@@ -2653,7 +2653,7 @@ function renderPotsPane(pane) {
 
 /* ---------- סקירה — לוח מחוונים ---------- */
 
-/* הפלטה עברה את בדיקת עיוורון הצבעים; לכל פרוסה גם תווית כתובה לידה */
+/* הפלטה עברה בדיקת עיוורון צבעים; לכל פרוסה גם שם וסכום כתובים */
 const PIE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'];
 
 const shiftM = (ym, n) => shiftMonth(ym, n);
@@ -2678,19 +2678,17 @@ function recurring(ym) {
       const last = sorted[0];
       const prev = sorted.find(x => x.ym !== last.ym);
       return {
-        label: last.label, cat: last.cat, on: last.txn.happened_on,
-        amount: last.amount,
+        label: last.label, cat: last.cat, amount: last.amount,
         delta: prev ? Math.round((last.amount - prev.amount) * 100) / 100 : 0,
       };
     })
     .sort((a, c) => c.amount - a.amount)
-    .slice(0, 6);
+    .slice(0, 5);
 }
 
 /** טבעת — פרוסה לכל קטגוריה, עם רווח קטן ביניהן כדי שהגבול ייקרא. */
 function donutSvg(slices, total) {
-  const r = 54, w = 20, C = 2 * Math.PI * r;
-  const gap = 2.5;
+  const r = 52, w = 16, C = 2 * Math.PI * r, gap = 3;
   let off = 0;
   const arcs = slices.map((s, i) => {
     const len = Math.max(0, C * (s.total / (total || 1)) - gap);
@@ -2706,32 +2704,10 @@ function donutSvg(slices, total) {
   </svg>`;
 }
 
-/** עמודות תזרים — הכנסות מול הוצאות, ארבעה חודשים אחרונים. */
-function flowSvg(months) {
-  const W = 300, H = 130, pad = 22;
-  const max = Math.max(1, ...months.flatMap(m => [m.inc, m.out]));
-  const step = (W - pad) / months.length;
-  const bw = Math.min(18, step / 3);
-  const y = v => H - pad - (v / max) * (H - pad - 8);
-  const bars = months.map((m, i) => {
-    const cx = pad + step * i + step / 2;
-    return `
-      <rect x="${(cx - bw - 2).toFixed(1)}" y="${y(m.inc).toFixed(1)}" width="${bw}"
-            height="${(H - pad - y(m.inc)).toFixed(1)}" rx="3" fill="#1baf7a"/>
-      <rect x="${(cx + 2).toFixed(1)}" y="${y(m.out).toFixed(1)}" width="${bw}"
-            height="${(H - pad - y(m.out)).toFixed(1)}" rx="3" fill="#e34948"/>
-      <text x="${cx.toFixed(1)}" y="${H - 6}" text-anchor="middle" class="flow__x">${esc(m.short)}</text>`;
-  }).join('');
-  return `<svg class="flow2" viewBox="0 0 ${W} ${H}" role="img" aria-label="הכנסות מול הוצאות לפי חודש">
-    <line x1="${pad - 6}" y1="${H - pad}" x2="${W}" y2="${H - pad}" stroke="var(--line)" stroke-width="1"/>
-    ${bars}
-  </svg>`;
-}
-
 function renderOverview(b) {
   const ym = dashMonth;
   if (!state.bank) {
-    b.innerHTML = `<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק. אפשר למשוך מהלשונית ״קופות״.</p>`;
+    b.innerHTML = `<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק.</p>`;
     return;
   }
 
@@ -2746,15 +2722,13 @@ function renderOverview(b) {
   const earned = Math.round(sum(income, t => t.amount) * 100) / 100;
   const net = Math.round((earned - spentTotal) * 100) / 100;
 
-  /* השוואה לחודש שעבר */
   const pm = shiftM(ym, -1);
   const pOut = Math.round(sum(monthSpend(pm).filter(x => !x.owed && x.kind !== 'skip'), x => x.amount) * 100) / 100;
   const pIn = Math.round(sum(monthIncome(pm), t => t.amount) * 100) / 100;
   const pct = (now, before) => (before > 0 ? Math.round((now - before) / before * 100) : null);
   const trend = (v, good) => v == null ? '' :
-    `<span class="tr" data-tone="${(v >= 0) === good ? 'up' : 'down'}">${v >= 0 ? '↑' : '↓'} ${Math.abs(v)}% מהחודש שעבר</span>`;
+    `<span class="tr" data-tone="${(v >= 0) === good ? 'up' : 'down'}">${v >= 0 ? '↑' : '↓'}${Math.abs(v)}%</span>`;
 
-  /* חלוקה לקטגוריות */
   const byCat = new Map();
   spend.forEach(x => byCat.set(x.cat, Math.round(((byCat.get(x.cat) ?? 0) + x.amount) * 100) / 100));
   const catsAll = [...byCat.entries()]
@@ -2764,98 +2738,73 @@ function renderOverview(b) {
   const rest = Math.round(sum(catsAll.slice(5), c => c.total) * 100) / 100;
   if (rest) slices.push({ cat: null, total: rest, label: 'אחר' });
 
-  /* תזרים ארבעה חודשים */
-  const flow = [3, 2, 1, 0].map(k => {
-    const m = shiftM(ym, -k);
-    return {
-      short: new Date(m + '-15T12:00:00').toLocaleDateString('he-IL', { month: 'short' }),
-      inc: Math.round(sum(monthIncome(m), t => t.amount) * 100) / 100,
-      out: Math.round(sum(monthSpend(m).filter(x => !x.owed && x.kind !== 'skip'), x => x.amount) * 100) / 100,
-    };
-  });
-
   const cs = cards();
   const cardsNow = Math.round(sum(cs, c => cardPending(c)) * 100) / 100;
   const cardsPrev = Math.round(sum(cs, c => Math.abs(Number(c.balance) || 0)) * 100) / 100;
-  const chkAcc = (state.bank.accounts ?? []).filter(isCheckingAcc);
 
   const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
   const owedOut = byKind('owed');
   const owedBack = refundsIn(ym);
   const owedLeft = Math.round((owedOut - owedBack) * 100) / 100;
-  const moved = byKind('skip');
 
   const meters = [
     { pot: businessPot(), spent: byKind('business') },
     { pot: funPot(),      spent: byKind('fun') },
   ].filter(m => m.pot);
 
-  const greenPct = checking + held > 0 ? Math.round(checking / (checking + held) * 100) : 100;
+  const greenPct = checking > 0 ? Math.max(4, Math.min(100, Math.round((checking - held) / checking * 100))) : 100;
   const rec = recurring(ym);
 
   b.innerHTML = `
   <div class="dash2">
 
-    <section class="card2 card2--hero">
-      <h3 class="card2__title">מצב נזיל</h3>
+    <section class="card2 card2--hero card2--wide">
+      <span class="card2__eyebrow">פנוי עכשיו</span>
       <b class="hero2__amount" dir="ltr">${esc(money(real ?? 0))}</b>
-      <div class="hero2__bar" role="img" aria-label="כסף זמין מול אשראי">
+      <div class="hero2__bar" role="img" aria-label="פנוי מול אשראי">
         <span class="hero2__green" style="width:${greenPct}%"></span>
         <span class="hero2__red" style="width:${100 - greenPct}%"></span>
       </div>
       <div class="hero2__legend">
-        <span><i class="dot dot--green"></i>כסף זמין <b dir="ltr">${esc(money(checking))}</b></span>
-        <span><i class="dot dot--red"></i>אשראי שטרם ירד <b dir="ltr">${esc(money(held))}</b></span>
+        <span><i class="dot dot--green"></i>בעו״ש <b dir="ltr">${esc(money(checking))}</b></span>
+        <span><i class="dot dot--red"></i>אשראי <b dir="ltr">${esc(money(held))}</b></span>
       </div>
     </section>
 
     <section class="card2">
       <h3 class="card2__title">חשבונות</h3>
       <div class="acct">
-        <span class="acct__ico" aria-hidden="true">🏦</span>
-        <span class="acct__main"><b>עו״ש</b><small>${chkAcc.length} חשבון</small></span>
+        <span class="acct__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 20 8H4l8-4.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M6 11v6M10 11v6M14 11v6M18 11v6M3.5 19.5h17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+        <span class="acct__main"><b>עו״ש</b></span>
         <b class="acct__val" dir="ltr">${esc(money(checking))}</b>
       </div>
       <div class="acct">
-        <span class="acct__ico" aria-hidden="true">💳</span>
-        <span class="acct__main"><b>כרטיסי אשראי</b><small>${cs.length} כרטיסים</small></span>
-        <span class="acct__two">
-          <b class="acct__val acct__val--red" dir="ltr">${esc(money(cardsNow))}</b>
-          <small>חודש נוכחי</small>
-          <small class="acct__prev">חיוב קודם ${esc(money(cardsPrev))}</small>
+        <span class="acct__ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="13" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.6"/></svg>
         </span>
+        <span class="acct__main"><b>אשראי</b><small>קודם ${esc(money(cardsPrev))}</small></span>
+        <b class="acct__val acct__val--red" dir="ltr">${esc(money(cardsNow))}</b>
       </div>
     </section>
 
     <section class="card2">
       <h3 class="card2__title">החודש</h3>
       <div class="m3">
-        <div class="m3__cell"><span>הכנסות</span><b class="is-in" dir="ltr">${esc(money(earned))}</b>${trend(pct(earned, pIn), true)}</div>
-        <div class="m3__cell"><span>הוצאות</span><b dir="ltr">${esc(money(spentTotal))}</b>${trend(pct(spentTotal, pOut), false)}</div>
-        <div class="m3__cell"><span>נטו</span><b class="${net < 0 ? 'is-out' : 'is-in'}" dir="ltr">${esc(money(net))}</b></div>
+        <div class="m3__cell"><span>נכנס</span><b class="is-in" dir="ltr">${esc(money(earned))}</b>${trend(pct(earned, pIn), true)}</div>
+        <div class="m3__cell"><span>יצא</span><b dir="ltr">${esc(money(spentTotal))}</b>${trend(pct(spentTotal, pOut), false)}</div>
+        <div class="m3__cell"><span>נשאר</span><b class="${net < 0 ? 'is-out' : 'is-in'}" dir="ltr">${esc(money(net))}</b></div>
       </div>
     </section>
 
     <section class="card2">
-      <h3 class="card2__title">תנועות קבועות</h3>
-      ${rec.length ? `<div class="rec">${rec.map(r => `
-        <div class="rec__row">
-          <span class="rec__main"><b>${esc(r.label)}</b><small>${esc(r.on)} · ${esc(CATS[r.cat]?.label ?? '')}</small></span>
-          <span class="rec__end">
-            <b dir="ltr">−${esc(money(r.amount))}</b>
-            ${r.delta ? `<small class="tr" data-tone="${r.delta > 0 ? 'down' : 'up'}">${r.delta > 0 ? '↑' : '↓'} ${esc(money(Math.abs(r.delta)))}</small>` : ''}
-          </span>
-        </div>`).join('')}</div>`
-        : '<p class="wallet__empty">עוד אין מספיק היסטוריה לזהות תנועות קבועות.</p>'}
-    </section>
-
-    <section class="card2">
-      <h3 class="card2__title">על מה יצא הכסף</h3>
+      <h3 class="card2__title">על מה יצא</h3>
       ${slices.length ? `
         <div class="pie">
           <div class="pie__art">
             ${donutSvg(slices, spentTotal)}
-            <span class="pie__mid"><small>סה״כ</small><b dir="ltr">${esc(money(spentTotal))}</b></span>
+            <b class="pie__mid" dir="ltr">${esc(money(spentTotal))}</b>
           </div>
           <ul class="pie__legend">
             ${slices.map((s, i) => `
@@ -2863,36 +2812,38 @@ function renderOverview(b) {
                 <i class="dot" style="background:${PIE[i % PIE.length]}"></i>
                 <span class="pie__name">${esc(s.label)}</span>
                 <b dir="ltr">${esc(money(s.total))}</b>
-                <small>${spentTotal ? Math.round(s.total / spentTotal * 100) : 0}%</small>
               </li>`).join('')}
           </ul>
-        </div>`
-        : '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>'}
+        </div>` : '<p class="wallet__empty">אין הוצאות החודש.</p>'}
     </section>
 
     <section class="card2">
-      <h3 class="card2__title">תזרים לפי חודש</h3>
-      <div class="flowlegend">
-        <span><i class="dot dot--green"></i>הכנסות</span>
-        <span><i class="dot dot--red"></i>הוצאות</span>
-      </div>
-      ${flowSvg(flow)}
+      <h3 class="card2__title">חוזר כל חודש</h3>
+      ${rec.length ? `<div class="rec">${rec.map(r => `
+        <div class="rec__row">
+          <span class="rec__name">${esc(r.label)}</span>
+          <span class="rec__end">
+            <b dir="ltr">${esc(money(r.amount))}</b>
+            ${r.delta ? `<i class="tr" data-tone="${r.delta > 0 ? 'down' : 'up'}">${r.delta > 0 ? '↑' : '↓'}</i>` : ''}
+          </span>
+        </div>`).join('')}</div>`
+        : '<p class="wallet__empty">אין עדיין מספיק היסטוריה.</p>'}
     </section>
 
     ${owedOut || owedBack ? `
-      <section class="card2 card2--wide owed2">
-        <h3 class="card2__title">כסף שהוצאתי עבור אחרים</h3>
+      <section class="card2 card2--wide">
+        <h3 class="card2__title">מחזירים לי</h3>
         <div class="owed2__nums">
           <span>שילמתי <b dir="ltr">${esc(money(owedOut))}</b></span>
-          <span>חזר אליי <b dir="ltr">${esc(money(owedBack))}</b></span>
+          <span>חזר <b dir="ltr">${esc(money(owedBack))}</b></span>
           <span data-tone="${owedLeft > 0 ? 'wait' : 'done'}">
-            ${owedLeft > 0 ? `מחכה ל־<b dir="ltr">${esc(money(owedLeft))}</b>` : 'הכול חזר'}</span>
+            ${owedLeft > 0 ? `נותר <b dir="ltr">${esc(money(owedLeft))}</b>` : 'הכול חזר'}</span>
         </div>
       </section>` : ''}
 
     ${meters.length ? `
       <section class="card2 card2--wide">
-        <h3 class="card2__title">עמידה בתקציב</h3>
+        <h3 class="card2__title">תקציב</h3>
         <div class="ovmeters">
           ${meters.map(m => {
             const budget = potBudget(m.pot, ym);
@@ -2909,16 +2860,14 @@ function renderOverview(b) {
                 ${budget > 0
                   ? over ? `<b class="ovmeter__over">חריגה ${esc(money(Math.round((m.spent - budget) * 100) / 100))}</b>`
                          : `<span>נשאר ${esc(money(Math.round((budget - m.spent) * 100) / 100))}</span>`
-                  : '<span>אין תקציב</span>'}
-                <label class="ovmeter__set">
-                  <input class="ovmeter__input" type="number" dir="ltr" min="0" step="10" inputmode="decimal"
-                         placeholder="תקציב" value="${state.budgets[m.pot.id] ?? ''}" data-budget="${esc(m.pot.id)}">
-                </label>
+                  : '<span></span>'}
+                <input class="ovmeter__input" type="number" dir="ltr" min="0" step="10" inputmode="decimal"
+                       placeholder="תקציב" value="${state.budgets[m.pot.id] ?? ''}" data-budget="${esc(m.pot.id)}"
+                       aria-label="תקציב ל${esc(m.pot.name)}">
               </div>
             </div>`;
           }).join('')}
         </div>
-        ${moved ? `<p class="ov__note">בנוסף ${esc(money(moved))} בהעברות והחזרים — לא נספרו כהוצאה.</p>` : ''}
       </section>` : ''}
   </div>`;
 
