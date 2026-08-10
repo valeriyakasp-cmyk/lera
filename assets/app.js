@@ -21,6 +21,7 @@ const LS = {
   catmap:   'catmap.v1',     // קטגוריה שנקבעה ידנית לבית עסק — נזכרת לפעם הבאה
   charged:  'charged.v1',    // חיובי אשראי שכבר ירדו, לפי סימון ידני
   budgets:  'budgets.v1',    // תקציב חודשי לקופה, אם נקבע ידנית
+  cardest:  'cardest.v1',    // חיוב אשראי צפוי שהוזן ידנית, לפי כרטיס
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -149,6 +150,7 @@ const state = {
   catmap:   read(LS.catmap, {}),
   charged:  read(LS.charged, {}),
   budgets:  read(LS.budgets, {}),
+  cardest:  read(LS.cardest, {}),
   cfg:      read(LS.cfg, { url: '', key: '' }),
   ui:       read(LS.ui, { doneOpen: true }),
   user:     null,
@@ -170,6 +172,7 @@ const persist = () => {
   write(LS.catmap, state.catmap);
   write(LS.charged, state.charged);
   write(LS.budgets, state.budgets);
+  write(LS.cardest, state.cardest);
 };
 
 /* ---------- money ---------- */
@@ -721,15 +724,38 @@ function bankMoves() {
     .sort((x, y) => String(x.happened_on).localeCompare(String(y.happened_on)));
 }
 
-/** קניות בכרטיסי האשראי — כולן, עם שם בית העסק. */
+/**
+ * מחזור החיוב נסגר כמה ימים לפני שהכסף באמת יורד, אז קנייה מה-31
+ * בחודש כבר שייכת לחיוב של החודש הבא. הסטה של יומיים אחורה מהתאריך
+ * שבו ירד החיוב האחרון מכסה את הפער הזה.
+ */
+const PENDING_FROM = () => shiftDate(bankAnchor(), -2);
+
+/** קניות בכרטיסי האשראי שעוד לא נגבו, עם שם בית העסק. */
 function bankCardBuys() {
   const b = state.bank;
   if (!b) return [];
   const ids = new Set((b.accounts ?? []).filter(isCardAcc).map(a => a.id));
-  const from = bankAnchor();
+  const from = PENDING_FROM();
   return (b.transactions ?? [])
     .filter(t => ids.has(t.account_id) && t.happened_on > from && t.amount)
     .sort((x, y) => String(x.happened_on).localeCompare(String(y.happened_on)));
+}
+
+/** מה שכל כרטיס צפוי לגבות — הערכה, או המספר שהזנת בעצמך. */
+function cardPending(card) {
+  const manual = state.cardest[card.id];
+  if (manual != null && manual !== '') return Number(manual) || 0;
+  return Math.round(sum(bankCardBuys().filter(t =>
+    t.account_id === card.id && !alreadyDebited(t)), t => Math.abs(Math.min(t.amount, 0))) * 100) / 100;
+}
+
+const cards = () => (state.bank?.accounts ?? []).filter(isCardAcc);
+
+function setCardEst(id, value) {
+  if (value === '' || value == null) delete state.cardest[id];
+  else state.cardest[id] = Number(value) || 0;
+  write(LS.cardest, state.cardest);
 }
 
 /**
@@ -742,7 +768,7 @@ function bankOlderBuys() {
   if (!b) return [];
   const ids = new Set((b.accounts ?? []).filter(isCardAcc).map(a => a.id));
   const from = shiftDate(bankAnchor(), -45);
-  const to = bankAnchor();
+  const to = PENDING_FROM();
   return (b.transactions ?? [])
     .filter(t => ids.has(t.account_id) && t.happened_on > from && t.happened_on <= to && t.amount < 0)
     .filter(t => !alreadyDebited(t))
@@ -780,7 +806,7 @@ function alreadyDebited(t) {
 function bankAvailable() {
   const chk = bankChecking();
   if (chk == null) return null;
-  const pending = sum(bankCardBuys().filter(t => !alreadyDebited(t)), t => Math.abs(Math.min(t.amount, 0)));
+  const pending = sum(cards(), c => cardPending(c));
   return Math.round((chk - pending - bankOwed()) * 100) / 100;
 }
 
@@ -2595,13 +2621,32 @@ const refreshFinance = () => (appMode === 'money' ? renderMoney() : renderBank()
 
 function renderPotsPane(pane) {
   if (potsView === 'sync') return renderBankSync(pane);
+  const cs = cards();
   pane.innerHTML = `
     <div class="potspane">
+      ${cs.length ? `
+        <div class="cardest">
+          <h3 class="ov__h">חיוב אשראי צפוי</h3>
+          <p class="ov__note">אני מעריך לפי הקניות שעוד לא נגבו. אם באפליקציה של חברת האשראי כתוב מספר אחר — פשוט הקלידי אותו, והוא זה שיקבע.</p>
+          ${cs.map(c => `
+            <div class="cardest__row">
+              <span class="cardest__name">${esc(c.name)}</span>
+              <b class="cardest__val" dir="ltr">${esc(money(cardPending(c)))}</b>
+              <input class="cardest__input" type="number" dir="ltr" min="0" step="1" inputmode="decimal"
+                     placeholder="לפי החישוב" value="${state.cardest[c.id] ?? ''}" data-card="${esc(c.id)}"
+                     aria-label="חיוב צפוי ל${esc(c.name)}">
+            </div>`).join('')}
+        </div>` : ''}
+
       <div class="potspane__head">
         <button class="btn btn--quiet" id="paneSync" type="button">עדכון מהבנק</button>
       </div>
       <div id="potsHost"></div>
     </div>`;
+  $$('.cardest__input', pane).forEach(x => x.addEventListener('change', () => {
+    setCardEst(x.dataset.card, x.value.trim());
+    refreshFinance();
+  }));
   $('#paneSync', pane).addEventListener('click', openBankSync);
   renderPots($('#potsHost', pane));
 }
