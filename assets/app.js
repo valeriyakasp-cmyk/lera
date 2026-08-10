@@ -2255,8 +2255,9 @@ function openWallet() {
 }
 function closeWallet() { walletSheet.root.hidden = true; }
 
-function renderWallet() {
+function renderWallet(host = null, only = 'all') {
   ensureCharges();
+  const show = k => only === 'all' || only === k;
 
   const rows     = expensesIn(walletMonth);
   const mine     = rows.filter(isMine);
@@ -2276,9 +2277,10 @@ function renderWallet() {
   const payers   = [...new Set(active.filter(s => !isMine(s)).map(s => s.payer))].sort();
   const isNow    = walletMonth === monthOf();
 
-  const b = walletSheet.body;
+  const b = host ?? walletSheet.body;
+  if (!b) return;
   b.innerHTML = `
-    <div class="monthnav">
+    ${host ? '' : `<div class="monthnav">
       <button class="datenav__arrow" id="wPrev" type="button" aria-label="חודש קודם">
         <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -2286,8 +2288,9 @@ function renderWallet() {
       <button class="datenav__arrow" id="wNext" type="button" aria-label="חודש הבא" ${isNow ? 'disabled' : ''}>
         <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-    </div>
+    </div>`}
 
+    ${show('flow') ? `
     <div class="moneyrow">
       <div class="moneytile moneytile--in">
         <span>נכנס</span>
@@ -2308,23 +2311,26 @@ function renderWallet() {
       חד־פעמי <strong dir="ltr">${money(sum(oneRows, e => e.amount))}</strong><br>
       התחייבות חודשית שוטפת על מנויים פעילים שלך: <strong dir="ltr">${money(monthlyActive())}</strong>
       ${theirs.length ? `<br>מישהו אחר משלם החודש <strong dir="ltr">${money(sum(theirs, e => e.amount))}</strong> — מתועד, לא נספר בהוצאות שלך.` : ''}
-    </p>
+    </p>` : ''}
 
+    ${show('flow') ? `
     <h3 class="rep__h">כסף שנכנס</h3>
     <div id="wIncome"></div>
-    <button class="spend__add" id="wAddInc" type="button"><span aria-hidden="true">+</span><span>הוספת תקבול</span></button>
+    <button class="spend__add" id="wAddInc" type="button"><span aria-hidden="true">+</span><span>הוספת תקבול</span></button>` : ''}
 
+    ${show('subs') ? `
     <h3 class="rep__h">מנויים פעילים</h3>
     <div id="wActive"></div>
     ${payers.map(name => `
       <h3 class="rep__h rep__h--soft">${esc(name)} משלם·ת</h3>
       <div data-payer-box="${esc(name)}"></div>`).join('')}
     ${inactive.length ? '<h3 class="rep__h">מנויים לא פעילים</h3><div id="wInactive"></div>' : ''}
-    <button class="spend__add" id="wAddSub" type="button"><span aria-hidden="true">+</span><span>הוספת מנוי</span></button>
+    <button class="spend__add" id="wAddSub" type="button"><span aria-hidden="true">+</span><span>הוספת מנוי</span></button>` : ''}
 
+    ${show('flow') ? `
     <h3 class="rep__h">הוצאות החודש</h3>
     <div id="wExpenses"></div>
-    <button class="spend__add" id="wAddExp" type="button"><span aria-hidden="true">+</span><span>הוספת הוצאה</span></button>`;
+    <button class="spend__add" id="wAddExp" type="button"><span aria-hidden="true">+</span><span>הוספת הוצאה</span></button>` : ''}`;
 
   const subNode = sub => {
     const charged = state.expenses.find(e => e.subscription_id === sub.id && e.period === walletMonth);
@@ -2362,8 +2368,8 @@ function renderWallet() {
   };
 
   const activeBox = $('#wActive', b);
-  if (myActive.length) activeBox.replaceChildren(...myActive.map(subNode));
-  else activeBox.innerHTML = '<p class="wallet__empty">אין מנויים שאת משלמת עליהם החודש.</p>';
+  if (activeBox) { if (myActive.length) activeBox.replaceChildren(...myActive.map(subNode));
+  else activeBox.innerHTML = '<p class="wallet__empty">אין מנויים שאת משלמת עליהם החודש.</p>'; }
 
   payers.forEach(name => {
     const box = b.querySelector(`[data-payer-box="${CSS.escape(name)}"]`);
@@ -2374,7 +2380,7 @@ function renderWallet() {
 
   /* ---- income rows ---- */
   const incBox = $('#wIncome', b);
-  if (inRows.length) {
+  if (incBox) { if (inRows.length) {
     incBox.replaceChildren(...inRows
       .slice()
       .sort((x, y) => (x.received_on ?? '').localeCompare(y.received_on ?? ''))
@@ -2394,10 +2400,10 @@ function renderWallet() {
       }));
   } else {
     incBox.innerHTML = '<p class="wallet__empty">עוד לא נרשם כסף שנכנס החודש.</p>';
-  }
+  } }
 
   const expBox = $('#wExpenses', b);
-  if (rows.length) {
+  if (expBox) { if (rows.length) {
     expBox.replaceChildren(...rows
       .slice()
       .sort((x, y) => (x.spend_date ?? '').localeCompare(y.spend_date ?? ''))
@@ -2418,17 +2424,17 @@ function renderWallet() {
       }));
   } else {
     expBox.innerHTML = '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>';
-  }
+  } }
 
-  $('#wPrev', b).addEventListener('click', () => { walletMonth = shiftMonth(walletMonth, -1); renderWallet(); });
-  $('#wNext', b).addEventListener('click', () => {
+  $('#wPrev', b)?.addEventListener('click', () => { walletMonth = shiftMonth(walletMonth, -1); renderWallet(); });
+  $('#wNext', b)?.addEventListener('click', () => {
     if (walletMonth >= monthOf()) return;
     walletMonth = shiftMonth(walletMonth, 1);
     renderWallet();
   });
-  $('#wAddSub', b).addEventListener('click', () => openSubSheet(null));
-  $('#wAddInc', b).addEventListener('click', () => openIncSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
-  $('#wAddExp', b).addEventListener('click', () => openExpSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
+  $('#wAddSub', b)?.addEventListener('click', () => openSubSheet(null));
+  $('#wAddInc', b)?.addEventListener('click', () => openIncSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
+  $('#wAddExp', b)?.addEventListener('click', () => openExpSheet(null, walletMonth === monthOf() ? state.date : walletMonth + '-01'));
 }
 
 
@@ -2437,13 +2443,12 @@ function renderWallet() {
    ============================================================ */
 const bankSheet = { root: $('#bankSheet'), body: $('#bankBody') };
 let bankPotId = null;
-let bankView = 'dash';   // dash | pots | sync
+let bankView = 'pots';   // pots | sync
 
 function openBank() {
   if (!bankSheet.root) return;
   if (!state.pots.length) DEFAULT_POTS.forEach((d, i) => addPot({ ...d, position: i }));
   if (!potById(bankPotId)) bankPotId = potsByPos()[0]?.id ?? null;
-  bankView = 'dash';
   renderBank();
   bankSheet.root.hidden = false;
 }
@@ -2474,15 +2479,28 @@ function monthSpend(ym) {
     .filter(t => cardIds.has(t.account_id) || !CARD_CHARGE.test(bankLabel(t)))
     .map(t => {
       const cat = catOf(t);
+      const owed = state.bankmap[t.id]?.owed === true;
       return {
-        txn: t, cat,
+        txn: t, cat, owed,
         label: bankLabel(t),
         acc: accById(t.account_id),
-        kind: CATS[cat]?.kind ?? 'fun',
+        /* הוצאה שמישהו מחזיר עליה איננה בזבוז ואיננה עסקית — היא בדרך חזרה */
+        kind: owed ? 'owed' : CATS[cat]?.kind ?? 'fun',
         amount: Math.round(Math.abs(t.amount) * 100) / 100,
       };
     })
     .sort((x, y) => String(y.txn.happened_on).localeCompare(String(x.txn.happened_on)));
+}
+
+/** החזרים שהתקבלו החודש — תקבולים שסומנו כ״החזר / העברה״. */
+function refundsIn(ym) {
+  const b = state.bank;
+  if (!b) return 0;
+  const chk = new Set((b.accounts ?? []).filter(isCheckingAcc).map(a => a.id));
+  return Math.round(sum((b.transactions ?? []).filter(t =>
+    chk.has(t.account_id) && t.amount > 0 &&
+    (t.happened_on ?? '').slice(0, 7) === ym &&
+    state.bankmap[t.id]?.as === 'skip'), t => t.amount) * 100) / 100;
 }
 
 function monthIncome(ym) {
@@ -2509,179 +2527,254 @@ function setBudget(potId, value) {
 
 const DASH_BAR = '#3D74A8';   // גוון אחד — האורך הוא שנושא את המידע
 
-function renderDash(b) {
-  const ym = dashMonth;
-  const spendAll = monthSpend(ym);
-  const income = monthIncome(ym);
-  const real = bankAvailable();
-  const checking = bankChecking();
+/* ============================================================
+   ניהול פיננסי — טאב שלם בתוך המערכת
+   ------------------------------------------------------------
+   כל מה שקשור לכסף נמצא כאן, מחולק לחמישה חלקים.
+   כל חלק נפתח לבד, כדי שלא צריך לגלול דרך הכול.
+   ============================================================ */
 
+let appMode  = 'day';      // day | money
+let moneyTab = 'overview'; // overview | txns | subs | flow | pots
+
+const MONEY_TABS = [
+  ['overview', 'סקירה'],
+  ['txns',     'תנועות'],
+  ['subs',     'מנויים'],
+  ['flow',     'הכנסות והוצאות'],
+  ['pots',     'קופות'],
+];
+
+const shell = () => document.querySelector('.shell');
+
+function setMode(m) {
+  appMode = m;
+  shell()?.setAttribute('data-mode', m);
+  const page = $('#moneyPage');
+  if (page) page.hidden = m !== 'money';
+  $('#modeDay')?.classList.toggle('is-on', m === 'day');
+  $('#modeMoney')?.classList.toggle('is-on', m === 'money');
+  $('#modeDay')?.setAttribute('aria-selected', String(m === 'day'));
+  $('#modeMoney')?.setAttribute('aria-selected', String(m === 'money'));
+  if (m === 'money') renderMoney();
+  else render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderMoney() {
+  const nav = $('#moneyNav');
+  const pane = $('#moneyPane');
+  if (!nav || !pane) return;
+  if (!state.pots.length) DEFAULT_POTS.forEach((d, i) => addPot({ ...d, position: i }));
+
+  $('#mLabel').textContent = heMonth(dashMonth);
+  $('#mNext').disabled = dashMonth >= monthOf();
+  $('#moneyMonth').hidden = moneyTab === 'pots';
+
+  nav.innerHTML = MONEY_TABS.map(([k, l]) => `
+    <button class="moneytab${moneyTab === k ? ' is-on' : ''}" type="button"
+            role="tab" aria-selected="${moneyTab === k}" data-tab="${k}">${l}</button>`).join('');
+  $$('.moneytab', nav).forEach(x => x.addEventListener('click', () => {
+    moneyTab = x.dataset.tab;
+    renderMoney();
+  }));
+
+  walletMonth = dashMonth;
+
+  if (moneyTab === 'overview') return renderOverview(pane);
+  if (moneyTab === 'txns')     return renderTxns(pane);
+  if (moneyTab === 'subs')     return renderWallet(pane, 'subs');
+  if (moneyTab === 'flow')     return renderWallet(pane, 'flow');
+  return renderPotsPane(pane);
+}
+
+let potsView = 'pots';   // pots | sync
+
+/** מרענן את המסך הפיננסי, לא משנה מאיזה חלק קראו לו. */
+const refreshFinance = () => (appMode === 'money' ? renderMoney() : renderBank());
+
+function renderPotsPane(pane) {
+  if (potsView === 'sync') return renderBankSync(pane);
+  pane.innerHTML = `
+    <div class="potspane">
+      <div class="potspane__head">
+        <button class="btn btn--quiet" id="paneSync" type="button">עדכון מהבנק</button>
+      </div>
+      <div id="potsHost"></div>
+    </div>`;
+  $('#paneSync', pane).addEventListener('click', openBankSync);
+  renderPots($('#potsHost', pane));
+}
+
+/* ---------- סקירה — הכול במבט אחד ---------- */
+
+function renderOverview(b) {
+  const ym = dashMonth;
   if (!state.bank) {
-    b.innerHTML = `<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק. עברי ל״עדכון מהבנק״.</p>`;
+    b.innerHTML = `<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק. אפשר למשוך מהלשונית ״קופות״.</p>`;
     return;
   }
 
-  /* ---- הכותרת ---- */
+  const spendAll = monthSpend(ym);
+  /* העברות והחזרים אינם הוצאה, וכסף שמחזירים עליו כבר לא שלי לספור */
+  const spend = spendAll.filter(x => !x.owed && x.kind !== 'skip');
+  const income = monthIncome(ym);
+  const real = bankAvailable();
+  const checking = bankChecking();
   const held = Math.round((checking - real) * 100) / 100;
 
-  /* ---- לפי חשבון ---- */
+  const spentTotal = Math.round(sum(spend, x => x.amount) * 100) / 100;
+  const earned = Math.round(sum(income, t => t.amount) * 100) / 100;
+
+  /* חמש הקטגוריות הגדולות, והשאר מתאחדות — כדי שהעין תתפוס מיד */
+  const byCat = new Map();
+  spend.forEach(x => byCat.set(x.cat, Math.round(((byCat.get(x.cat) ?? 0) + x.amount) * 100) / 100));
+  const all = [...byCat.entries()]
+    .map(([cat, total]) => ({ cat, total, label: CATS[cat]?.label ?? cat }))
+    .sort((x, y) => y.total - x.total);
+  const top = all.slice(0, 5);
+  const restTotal = Math.round(sum(all.slice(5), c => c.total) * 100) / 100;
+  if (restTotal) top.push({ cat: null, total: restTotal, label: 'שאר הקטגוריות' });
+  const catMax = top[0]?.total ?? 1;
+
+  const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
+  const moved = byKind('skip');
+  const owedOut = byKind('owed');
+  const owedBack = refundsIn(ym);
+  const owedLeft = Math.round((owedOut - owedBack) * 100) / 100;
+
+  const meters = [
+    { pot: businessPot(), spent: byKind('business') },
+    { pot: funPot(),      spent: byKind('fun') },
+  ].filter(m => m.pot);
+
+  b.innerHTML = `
+    <div class="ovhero">
+      <span class="ovhero__label">הכסף שבאמת שלך</span>
+      <b class="ovhero__amount" dir="ltr">${esc(money(real ?? 0))}</b>
+      <span class="ovhero__sub">בעו״ש ${esc(money(checking ?? 0))}${held ? ` · מזה כבר הוצא ${esc(money(held))}` : ''}</span>
+    </div>
+
+    <div class="ovstats">
+      <div class="ovstat ovstat--in"><span>נכנס</span><b dir="ltr">${esc(money(earned))}</b></div>
+      <div class="ovstat"><span>יצא</span><b dir="ltr">${esc(money(spentTotal))}</b></div>
+      <div class="ovstat ovstat--net" data-tone="${earned - spentTotal < 0 ? 'down' : 'up'}">
+        <span>${earned - spentTotal < 0 ? 'הפסד' : 'נשאר'}</span>
+        <b dir="ltr">${esc(money(Math.abs(Math.round((earned - spentTotal) * 100) / 100)))}</b>
+      </div>
+    </div>
+
+    ${owedOut || owedBack ? `
+      <div class="owedcard">
+        <span class="owedcard__label">כסף שהוצאתי עבור אחרים</span>
+        <div class="owedcard__nums">
+          <span>שילמתי <b dir="ltr">${esc(money(owedOut))}</b></span>
+          <span>חזר אליי <b dir="ltr">${esc(money(owedBack))}</b></span>
+          <span class="owedcard__left" data-tone="${owedLeft > 0 ? 'wait' : 'done'}">
+            ${owedLeft > 0 ? `מחכה ל־<b dir="ltr">${esc(money(owedLeft))}</b>` : 'הכול חזר'}
+          </span>
+        </div>
+        <p class="owedcard__note">לא נספר בבזבוזים ולא בעסקי.</p>
+      </div>` : ''}
+
+    ${meters.length ? `
+      <div class="ovmeters">
+        ${meters.map(m => {
+          const budget = potBudget(m.pot, ym);
+          const pct = budget > 0 ? Math.round(m.spent / budget * 100) : 0;
+          const over = budget > 0 && m.spent > budget;
+          return `
+          <div class="ovmeter${over ? ' is-over' : ''}" style="--pot:${esc(m.pot.colour ?? '#3D74A8')}">
+            <div class="ovmeter__head">
+              <span class="ovmeter__name">${esc(m.pot.name)}</span>
+              <span class="ovmeter__nums" dir="ltr">${esc(money(m.spent))}${budget > 0 ? ` / ${esc(money(budget))}` : ''}</span>
+            </div>
+            <span class="ovmeter__track"><span class="ovmeter__fill" style="width:${budget > 0 ? Math.min(100, pct) : 0}%"></span></span>
+            <div class="ovmeter__foot">
+              ${budget > 0
+                ? over ? `<b class="ovmeter__over">חריגה ${esc(money(Math.round((m.spent - budget) * 100) / 100))}</b>`
+                       : `<span>נשאר ${esc(money(Math.round((budget - m.spent) * 100) / 100))}</span>`
+                : '<span>אין תקציב</span>'}
+              <label class="ovmeter__set">
+                <input class="ovmeter__input" type="number" dir="ltr" min="0" step="10" inputmode="decimal"
+                       placeholder="תקציב" value="${state.budgets[m.pot.id] ?? ''}" data-budget="${esc(m.pot.id)}">
+              </label>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+
+    ${top.length ? `
+      <h3 class="ov__h">על מה יצא הכסף</h3>
+      <div class="ovbars">
+        ${top.map(c => `
+          <button class="ovbar" type="button"${c.cat ? ` data-cat="${esc(c.cat)}"` : ' disabled'}>
+            <span class="ovbar__name">${esc(c.label)}</span>
+            <span class="ovbar__track"><span class="ovbar__fill" style="width:${Math.max(3, Math.round(c.total / catMax * 100))}%"></span></span>
+            <b class="ovbar__val" dir="ltr">${esc(money(c.total))}</b>
+          </button>`).join('')}
+      </div>
+      ${moved ? `<p class="ov__note">בנוסף ${esc(money(moved))} בהעברות והחזרים — לא נספרו כהוצאה.</p>` : ''}`
+      : '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>'}`;
+
+  $$('.ovmeter__input', b).forEach(x => x.addEventListener('change', () => {
+    setBudget(x.dataset.budget, x.value.trim());
+    renderMoney();
+  }));
+  $$('.ovbar[data-cat]', b).forEach(x => x.addEventListener('click', () => {
+    dashCat = x.dataset.cat;
+    dashAcc = 'all';
+    moneyTab = 'txns';
+    renderMoney();
+  }));
+}
+
+/* ---------- תנועות — הרשימה המלאה, מסוננת ---------- */
+
+function renderTxns(b) {
+  const ym = dashMonth;
+  if (!state.bank) {
+    b.innerHTML = '<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק.</p>';
+    return;
+  }
+
+  const spendAll = monthSpend(ym);
   const accs = (state.bank.accounts ?? []).filter(a => isCardAcc(a) || isCheckingAcc(a));
   const perAcc = accs.map(a => ({
     acc: a,
     total: Math.round(sum(spendAll.filter(x => x.acc?.id === a.id), x => x.amount) * 100) / 100,
   })).filter(x => x.total > 0).sort((x, y) => y.total - x.total);
 
-  /* ---- לפי קטגוריה ---- */
-  const byCat = new Map();
-  spendAll.forEach(x => byCat.set(x.cat, Math.round(((byCat.get(x.cat) ?? 0) + x.amount) * 100) / 100));
-  const cats = [...byCat.entries()]
-    .map(([cat, total]) => ({ cat, total, label: CATS[cat]?.label ?? cat, kind: CATS[cat]?.kind ?? 'fun' }))
-    .sort((x, y) => y.total - x.total);
-  const catMax = cats[0]?.total ?? 1;
-  const spentTotal = Math.round(sum(cats, c => c.total) * 100) / 100;
+  const cats = [...new Set(spendAll.map(x => x.cat))];
 
-  /* ---- עסקי מול בזבוזים ---- */
-  const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
-  const biz = byKind('business');
-  const fun = byKind('fun');
-  const moved = byKind('skip');
-
-  const bizPot = businessPot();
-  const funPotObj = funPot();
-  const meters = [
-    { pot: bizPot, spent: biz, label: 'עסקי' },
-    { pot: funPotObj, spent: fun, label: 'בזבוזים' },
-  ].filter(m => m.pot);
-
-  /* ---- הרשימה ---- */
-  const spend = spendAll
+  const rows = spendAll
     .filter(x => dashAcc === 'all' || x.acc?.id === dashAcc)
     .filter(x => dashCat === 'all' || x.cat === dashCat);
 
   const groups = [];
-  spend.forEach(x => {
+  rows.forEach(x => {
     const d = x.txn.happened_on;
     if (!groups.length || groups[groups.length - 1].on !== d) groups.push({ on: d, rows: [] });
     groups[groups.length - 1].rows.push(x);
   });
 
-  const rowHtml = x => `
-    <div class="dashrow">
-      <span class="dashrow__main">
-        <span class="dashrow__title">${esc(x.label)}</span>
-        <span class="dashrow__meta">
-          <span class="dashrow__acc">${esc(x.acc?.name ?? 'עו״ש')}</span>
-          <span class="catchip catchip--${x.kind === 'business' ? 'biz' : 'fun'}">${esc(CATS[x.cat]?.label ?? '')}</span>
-        </span>
-      </span>
-      <b class="dashrow__amount" dir="ltr">−${esc(money(x.amount))}</b>
-    </div>`;
-
-  const dayLabel = on => {
-    const d = new Date(on + 'T12:00:00');
-    return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
-  };
+  const dayLabel = on => new Date(on + 'T12:00:00')
+    .toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
 
   b.innerHTML = `
-    <div class="dashhead">
-      <button class="datenav__arrow" id="dashPrev" type="button" aria-label="חודש קודם">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <span class="dashhead__month">${esc(heMonth(ym))}</span>
-      <button class="datenav__arrow" id="dashNext" type="button" aria-label="חודש הבא"${ym >= monthOf() ? ' disabled' : ''}>
-        <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+    <div class="filterbar">
+      <select class="filterbar__sel" id="fAcc" aria-label="סינון לפי כרטיס">
+        <option value="all">כל הכרטיסים</option>
+        ${perAcc.map(x => `<option value="${esc(x.acc.id)}"${dashAcc === x.acc.id ? ' selected' : ''}>${esc(x.acc.name)} · ${esc(money(x.total))}</option>`).join('')}
+      </select>
+      <select class="filterbar__sel" id="fCat" aria-label="סינון לפי קטגוריה">
+        <option value="all">כל הקטגוריות</option>
+        ${cats.map(c => `<option value="${esc(c)}"${dashCat === c ? ' selected' : ''}>${esc(CATS[c]?.label ?? c)}</option>`).join('')}
+      </select>
     </div>
 
-    <div class="dashhero">
-      <span class="dashhero__label">הכסף שבאמת שלך</span>
-      <b class="dashhero__amount" dir="ltr">${esc(money(real ?? 0))}</b>
-      <span class="dashhero__sub">
-        רשום בעו״ש ${esc(money(checking ?? 0))}${held ? ` · כבר הוצא וטרם נגבה ${esc(money(held))}` : ''}
-      </span>
-    </div>
+    <p class="ov__note">${rows.length} תנועות · סה״כ <b dir="ltr">${esc(money(Math.round(sum(rows, r => r.amount) * 100) / 100))}</b></p>
 
-    <div class="dashstats">
-      <div class="dashstat"><span>יצא החודש</span><b dir="ltr">${esc(money(spentTotal))}</b></div>
-      <div class="dashstat"><span>נכנס החודש</span><b dir="ltr">${esc(money(sum(income, t => t.amount)))}</b></div>
-      <div class="dashstat"><span>מספר עסקאות</span><b dir="ltr">${spendAll.length}</b></div>
-    </div>
-
-    <h3 class="rep__h">לפי כרטיס</h3>
-    <div class="dashaccs">
-      <button class="dashacc${dashAcc === 'all' ? ' is-on' : ''}" type="button" data-acc="all">
-        <span class="dashacc__name">הכול</span>
-        <b dir="ltr">${esc(money(Math.round(sum(spendAll, x => x.amount) * 100) / 100))}</b>
-      </button>
-      ${perAcc.map(x => `
-        <button class="dashacc${dashAcc === x.acc.id ? ' is-on' : ''}" type="button" data-acc="${esc(x.acc.id)}">
-          <span class="dashacc__name">${esc(x.acc.name)}</span>
-          <b dir="ltr">${esc(money(x.total))}</b>
-        </button>`).join('')}
-    </div>
-
-    <h3 class="rep__h">לפי קטגוריה</h3>
-    ${cats.length ? `
-      <div class="catbars">
-        ${cats.map(c => `
-          <button class="catbar${dashCat === c.cat ? ' is-on' : ''}" type="button" data-cat="${esc(c.cat)}">
-            <span class="catbar__head">
-              <span class="catbar__name">${esc(c.label)}</span>
-              <b class="catbar__val" dir="ltr">${esc(money(c.total))}</b>
-            </span>
-            <span class="catbar__track">
-              <span class="catbar__fill" style="width:${Math.max(2, Math.round(c.total / catMax * 100))}%;background:${DASH_BAR}"></span>
-            </span>
-          </button>`).join('')}
-      </div>
-      <p class="chart__cap">האורך יחסי לקטגוריה הגדולה ביותר. לחיצה מסננת את הרשימה למטה.</p>`
-      : '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>'}
-
-    <h3 class="rep__h">עסקי מול בזבוזים</h3>
-    <div class="splitcards">
-      <div class="splitcard" style="--pot:${esc(bizPot?.colour ?? '#2E86C1')}">
-        <span>עסקי</span><b dir="ltr">${esc(money(biz))}</b>
-      </div>
-      <div class="splitcard" style="--pot:${esc(funPotObj?.colour ?? '#0F8A57')}">
-        <span>בזבוזים</span><b dir="ltr">${esc(money(fun))}</b>
-      </div>
-      ${moved ? `<div class="splitcard splitcard--quiet"><span>העברות והחזרים</span><b dir="ltr">${esc(money(moved))}</b></div>` : ''}
-    </div>
-
-    <h3 class="rep__h">עמידה בתקציב</h3>
-    <div class="meters">
-      ${meters.map(m => {
-        const budget = potBudget(m.pot, ym);
-        const pct = budget > 0 ? Math.round(m.spent / budget * 100) : 0;
-        const over = budget > 0 && m.spent > budget;
-        return `
-        <div class="meter${over ? ' is-over' : ''}" style="--pot:${esc(m.pot.colour ?? '#3D74A8')}">
-          <div class="meter__head">
-            <span class="meter__name">${esc(m.pot.name)}</span>
-            <span class="meter__nums" dir="ltr">${esc(money(m.spent))} / ${budget > 0 ? esc(money(budget)) : '—'}</span>
-          </div>
-          <span class="meter__track">
-            <span class="meter__fill" style="width:${budget > 0 ? Math.min(100, pct) : 0}%"></span>
-          </span>
-          <div class="meter__foot">
-            ${budget > 0
-              ? over
-                ? `<b class="meter__over">חריגה של ${esc(money(Math.round((m.spent - budget) * 100) / 100))}</b>`
-                : `<span>נשאר ${esc(money(Math.round((budget - m.spent) * 100) / 100))} · ${pct}% נוצל</span>`
-              : '<span>לא נקבע תקציב לחודש הזה</span>'}
-            <label class="meter__set">
-              <span>תקציב</span>
-              <input class="meter__input" type="number" dir="ltr" min="0" step="10" inputmode="decimal"
-                     placeholder="אוטומטי" value="${state.budgets[m.pot.id] ?? ''}" data-budget="${esc(m.pot.id)}">
-            </label>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
-
-    <h3 class="rep__h">כל התנועות${dashAcc !== 'all' || dashCat !== 'all' ? ' · מסונן' : ''}</h3>
-    ${dashAcc !== 'all' || dashCat !== 'all'
-      ? '<button class="btn btn--quiet dash__clear" id="dashClear" type="button">ניקוי הסינון</button>' : ''}
     <div class="dashlist">
       ${groups.length ? groups.map(g => `
         <div class="dashday">
@@ -2689,30 +2782,33 @@ function renderDash(b) {
             <span>${esc(dayLabel(g.on))}</span>
             <b dir="ltr">−${esc(money(Math.round(sum(g.rows, r => r.amount) * 100) / 100))}</b>
           </div>
-          ${g.rows.map(rowHtml).join('')}
+          ${g.rows.map(x => `
+            <div class="dashrow${x.owed ? ' is-owed' : ''}">
+              <span class="dashrow__main">
+                <span class="dashrow__title">${esc(x.label)}</span>
+                <span class="dashrow__meta">
+                  <span class="dashrow__acc">${esc(x.acc?.name ?? 'עו״ש')}</span>
+                  <span class="catchip catchip--${x.owed ? 'owed' : x.kind === 'business' ? 'biz' : 'fun'}">${
+                    esc(x.owed ? 'מחזירים לי' : CATS[x.cat]?.label ?? '')}</span>
+                </span>
+              </span>
+              <span class="dashrow__end">
+                <b class="dashrow__amount" dir="ltr">−${esc(money(x.amount))}</b>
+                <button class="dashrow__owed" type="button" data-owed="${esc(x.txn.id)}"
+                        aria-pressed="${!!x.owed}" title="מישהו מחזיר לי על זה">↩</button>
+              </span>
+            </div>`).join('')}
         </div>`).join('')
         : '<p class="wallet__empty">אין תנועות שמתאימות לסינון.</p>'}
     </div>`;
 
-  $('#dashPrev', b).addEventListener('click', () => { dashMonth = shiftMonth(ym, -1); renderBank(); });
-  $('#dashNext', b).addEventListener('click', () => {
-    if (ym >= monthOf()) return;
-    dashMonth = shiftMonth(ym, 1);
-    renderBank();
-  });
-  $$('.dashacc', b).forEach(x => x.addEventListener('click', () => {
-    dashAcc = dashAcc === x.dataset.acc ? 'all' : x.dataset.acc;
-    renderBank();
+  $$('.dashrow__owed', b).forEach(x => x.addEventListener('click', () => {
+    const id = x.dataset.owed;
+    setBankRule(id, { owed: !(state.bankmap[id]?.owed) });
+    renderMoney();
   }));
-  $$('.catbar', b).forEach(x => x.addEventListener('click', () => {
-    dashCat = dashCat === x.dataset.cat ? 'all' : x.dataset.cat;
-    renderBank();
-  }));
-  $('#dashClear', b)?.addEventListener('click', () => { dashAcc = 'all'; dashCat = 'all'; renderBank(); });
-  $$('.meter__input', b).forEach(x => x.addEventListener('change', () => {
-    setBudget(x.dataset.budget, x.value.trim());
-    renderBank();
-  }));
+  $('#fAcc', b).addEventListener('change', e => { dashAcc = e.target.value; renderMoney(); });
+  $('#fCat', b).addEventListener('change', e => { dashCat = e.target.value; renderMoney(); });
 }
 
 
@@ -2723,15 +2819,16 @@ let bankSyncError = '';
 const AS_LABEL = { income: 'הכנסה', expense: 'הוצאה', skip: 'החזר / העברה' };
 
 async function openBankSync() {
+  potsView = 'sync';
   bankView = 'sync';
   bankSyncError = '';
-  renderBank();
+  refreshFinance();
   try {
     await fetchBank();
   } catch (err) {
     bankSyncError = err.message;
   }
-  if (bankSheet.root?.hidden === false && bankView === 'sync') renderBank();
+  if (potsView === 'sync') refreshFinance();
 }
 
 const catOptions = sel => Object.entries(CATS)
@@ -2780,7 +2877,7 @@ function renderBankSync(b) {
         <button class="btn btn--quiet" id="bankBack" type="button">חזרה</button>
       </div>
       <p class="wallet__empty">${esc(bankSyncError || 'מושך נתונים מהבנק…')}</p>`;
-    $('#bankBack', b).addEventListener('click', () => { bankView = 'pots'; renderBank(); });
+    $('#bankBack', b).addEventListener('click', () => { potsView = 'pots'; bankView = 'pots'; refreshFinance(); });
     return;
   }
 
@@ -2836,36 +2933,37 @@ function renderBankSync(b) {
 
     <button class="btn btn--pot banksync__go" id="bankApply" type="button">בנייה מחדש לפי הבנק</button>`;
 
-  $('#bankBack', b).addEventListener('click', () => { bankView = 'pots'; renderBank(); });
+  $('#bankBack', b).addEventListener('click', () => { potsView = 'pots'; bankView = 'pots'; refreshFinance(); });
 
   const byId = new Map(plan.rows.map(r => [r.txn.id, r.txn]));
   $$('.syncrow', b).forEach(row => {
     const id = row.dataset.txn;
     $('.syncrow__as', row).addEventListener('change', e => {
       setBankRule(id, { as: e.target.value, pot_id: null });
-      renderBank();
+      refreshFinance();
     });
     $('.syncrow__cat', row)?.addEventListener('change', e => {
       setCat(byId.get(id), e.target.value);
       setBankRule(id, { pot_id: null });
-      renderBank();
+      refreshFinance();
     });
     $('.syncrow__pot-sel', row)?.addEventListener('change', e => {
       setBankRule(id, { pot_id: e.target.value });
-      renderBank();
+      refreshFinance();
     });
   });
 
   $$('.owedrow', b).forEach(x => x.addEventListener('click', () => {
     toggleOwed(x.dataset.owed);
-    renderBank();
+    refreshFinance();
   }));
 
   $('#bankApply', b).addEventListener('click', () => {
     applyBankPlan(bankPlan());
+    potsView = 'pots';
     bankView = 'pots';
-    renderBank();
-    renderWallet();
+    refreshFinance();
+    toast('הקופות נבנו מחדש לפי הבנק');
   });
 }
 
@@ -2904,7 +3002,7 @@ function coinDrop(anchor) {
   setTimeout(() => layer.remove(), 1400);
 }
 
-const BANK_TABS = [['dash', 'דשבורד'], ['pots', 'קופות'], ['sync', 'עדכון מהבנק']];
+const BANK_TABS = [['pots', 'קופות'], ['sync', 'עדכון מהבנק']];
 
 function renderBank() {
   const host = bankSheet.body;
@@ -2920,13 +3018,12 @@ function renderBank() {
   $$('.banktab', host).forEach(x => x.addEventListener('click', () => {
     if (x.dataset.view === 'sync' && bankView !== 'sync') return openBankSync();
     bankView = x.dataset.view;
-    renderBank();
+    refreshFinance();
   }));
 
   const pane = $('#bankPane', host);
   if (bankView === 'sync') return renderBankSync(pane);
-  if (bankView === 'pots') return renderPots(pane);
-  return renderDash(pane);
+  return renderPots(pane);
 }
 
 function renderPots(b) {
@@ -2996,7 +3093,7 @@ function renderPots(b) {
 
     <button class="spend__add" id="potAdd" type="button"><span aria-hidden="true">+</span><span>הוספת קופה</span></button>`;
 
-  $$('.potpill', b).forEach(x => x.addEventListener('click', () => { bankPotId = x.dataset.pot; renderBank(); }));
+  $$('.potpill', b).forEach(x => x.addEventListener('click', () => { bankPotId = x.dataset.pot; refreshFinance(); }));
   $('#potAdd', b).addEventListener('click', () => openPotSheet(null));
   if (!active) return;
 
@@ -3029,7 +3126,7 @@ function renderPots(b) {
         del.addEventListener('click', e => {
           e.stopPropagation();
           deleteTxn(t.id);
-          renderBank();
+          refreshFinance();
           toast('התנועה נמחקה');
         });
         r.append(del);
@@ -3061,7 +3158,7 @@ function renderPots(b) {
           <span dir="ltr">${Math.round(pct)}%</span>
         </div>`;
       row.querySelector('.exprow__del').addEventListener('click', () => {
-        deleteGoal(g.id); renderBank(); toast('היעד נמחק');
+        deleteGoal(g.id); refreshFinance(); toast('היעד נמחק');
       });
       return row;
     }));
@@ -3075,7 +3172,7 @@ function renderPots(b) {
     const target = Number($('#goalTarget', b).value);
     if (!title || !(target > 0)) return;
     addGoal({ pot_id: active.id, title, target });
-    renderBank();
+    refreshFinance();
     toast('היעד נוסף');
   });
 }
@@ -3480,10 +3577,18 @@ $$('[data-split-close]').forEach(x => x.addEventListener('click', () => {
   }
 }));
 
-$('#bankBtn')?.addEventListener('click', openBank);
+$('#bankBtn')?.addEventListener('click', () => { moneyTab = 'overview'; setMode('money'); });
+$('#modeDay')?.addEventListener('click', () => setMode('day'));
+$('#modeMoney')?.addEventListener('click', () => setMode('money'));
+$('#mPrev')?.addEventListener('click', () => { dashMonth = shiftMonth(dashMonth, -1); renderMoney(); });
+$('#mNext')?.addEventListener('click', () => {
+  if (dashMonth >= monthOf()) return;
+  dashMonth = shiftMonth(dashMonth, 1);
+  renderMoney();
+});
 $$('[data-bank-close]').forEach(x => x.addEventListener('click', closeBank));
 
-$('#walletBtn').addEventListener('click', openWallet);
+$('#walletBtn')?.addEventListener('click', () => { moneyTab = 'flow'; setMode('money'); });
 $$('[data-wallet-close]').forEach(x => x.addEventListener('click', closeWallet));
 
 /* ---------- subscription editor ---------- */
@@ -4869,6 +4974,7 @@ setInterval(() => {
    ============================================================ */
 (async function boot() {
   setStatus('local');
+  shell()?.setAttribute('data-mode', 'day');
   ensureCharges();
   render();
   if (await connect()) {
@@ -4877,5 +4983,5 @@ setInterval(() => {
     else setStatus('local');
   }
   ensureCharges();
-  render();
+  if (appMode === 'money') renderMoney(); else render();
 })();
