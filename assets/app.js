@@ -745,6 +745,7 @@ function bankOlderBuys() {
   const to = bankAnchor();
   return (b.transactions ?? [])
     .filter(t => ids.has(t.account_id) && t.happened_on > from && t.happened_on <= to && t.amount < 0)
+    .filter(t => !alreadyDebited(t))
     .sort((x, y) => String(y.happened_on).localeCompare(String(x.happened_on)));
 }
 
@@ -759,11 +760,27 @@ function toggleOwed(id) {
 const bankOwed = () => Math.round(
   sum(bankOlderBuys().filter(t => isStillOwed(t.id)), t => Math.abs(t.amount)) * 100) / 100;
 
+/**
+ * חלק מהעסקאות בכרטיס יורדות מיד מהעו״ש ולא מחכות לחיוב החודשי.
+ * אלה כבר ירדו מהיתרה, אז אסור להוריד אותן שוב.
+ */
+function alreadyDebited(t) {
+  const b = state.bank;
+  if (!b || t.amount >= 0) return false;
+  const ids = new Set((b.accounts ?? []).filter(isCheckingAcc).map(a => a.id));
+  const cap = shiftDate(t.happened_on, 6);
+  return (b.transactions ?? []).some(d =>
+    ids.has(d.account_id) && d.amount < 0 &&
+    Math.abs(Math.abs(d.amount) - Math.abs(t.amount)) < 0.01 &&
+    d.happened_on >= t.happened_on && d.happened_on <= cap &&
+    CARD_CHARGE.test(bankLabel(d)));
+}
+
 /** הכסף שבאמת שלך: מה שבעו״ש, פחות מה שכבר הוצא ועוד לא נגבה. */
 function bankAvailable() {
   const chk = bankChecking();
   if (chk == null) return null;
-  const pending = sum(bankCardBuys(), t => Math.abs(Math.min(t.amount, 0)));
+  const pending = sum(bankCardBuys().filter(t => !alreadyDebited(t)), t => Math.abs(Math.min(t.amount, 0)));
   return Math.round((chk - pending - bankOwed()) * 100) / 100;
 }
 
