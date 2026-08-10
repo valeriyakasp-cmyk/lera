@@ -1709,7 +1709,8 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .catbar__name { font-size: 13.5px; font-weight: 600; }
 .catbar__val { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .catbar__track { display: block; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
-.catbar__fill { display: block; height: 100%; border-radius: 5px; }
+/* קצה מעוגל קל — עיגול מלא היה הופך ערך קטן לנקודה במקום לפס */
+.catbar__fill { display: block; height: 100%; min-width: 4px; border-radius: 3px; }
 
 .splitcards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
 .splitcard {
