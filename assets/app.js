@@ -20,6 +20,7 @@ const LS = {
   bankmap:  'bankmap.v1',    // איך סווגה כל תנועה: הכנסה, הוצאה או החזר
   catmap:   'catmap.v1',     // קטגוריה שנקבעה ידנית לבית עסק — נזכרת לפעם הבאה
   charged:  'charged.v1',    // חיובי אשראי שכבר ירדו, לפי סימון ידני
+  budgets:  'budgets.v1',    // תקציב חודשי לקופה, אם נקבע ידנית
 };
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -147,6 +148,7 @@ const state = {
   bankmap:  read(LS.bankmap, {}),
   catmap:   read(LS.catmap, {}),
   charged:  read(LS.charged, {}),
+  budgets:  read(LS.budgets, {}),
   cfg:      read(LS.cfg, { url: '', key: '' }),
   ui:       read(LS.ui, { doneOpen: true }),
   user:     null,
@@ -167,6 +169,7 @@ const persist = () => {
   write(LS.bankmap, state.bankmap);
   write(LS.catmap, state.catmap);
   write(LS.charged, state.charged);
+  write(LS.budgets, state.budgets);
 };
 
 /* ---------- money ---------- */
@@ -2417,17 +2420,284 @@ function renderWallet() {
    ============================================================ */
 const bankSheet = { root: $('#bankSheet'), body: $('#bankBody') };
 let bankPotId = null;
-let bankView = 'pots';   // pots | sync
+let bankView = 'dash';   // dash | pots | sync
 
 function openBank() {
   if (!bankSheet.root) return;
   if (!state.pots.length) DEFAULT_POTS.forEach((d, i) => addPot({ ...d, position: i }));
   if (!potById(bankPotId)) bankPotId = potsByPos()[0]?.id ?? null;
-  bankView = 'pots';
+  bankView = 'dash';
   renderBank();
   bankSheet.root.hidden = false;
 }
 function closeBank() { if (bankSheet.root) bankSheet.root.hidden = true; }
+
+/* ============================================================
+   דשבורד ההוצאות
+   ------------------------------------------------------------
+   מה יצא החודש, מאיזה כרטיס, על מה, ואם עמדתי בתקציב.
+   הנתונים מגיעים ישירות מהבנק — לא ממה שהוקלד ידנית.
+   ============================================================ */
+
+let dashMonth = monthOf();
+let dashAcc = 'all';
+let dashCat = 'all';
+
+/**
+ * ההוצאות של חודש מסוים, בלי לספור פעמיים.
+ * קנייה בכרטיס נספרת מהכרטיס, וחיוב האשראי בעו״ש מדולג —
+ * הוא רק גבייה של אותן קניות.
+ */
+function monthSpend(ym) {
+  const b = state.bank;
+  if (!b) return [];
+  const cardIds = new Set((b.accounts ?? []).filter(isCardAcc).map(a => a.id));
+  return (b.transactions ?? [])
+    .filter(t => (t.happened_on ?? '').slice(0, 7) === ym && t.amount < 0)
+    .filter(t => cardIds.has(t.account_id) || !CARD_CHARGE.test(bankLabel(t)))
+    .map(t => {
+      const cat = catOf(t);
+      return {
+        txn: t, cat,
+        label: bankLabel(t),
+        acc: accById(t.account_id),
+        kind: CATS[cat]?.kind ?? 'fun',
+        amount: Math.round(Math.abs(t.amount) * 100) / 100,
+      };
+    })
+    .sort((x, y) => String(y.txn.happened_on).localeCompare(String(x.txn.happened_on)));
+}
+
+function monthIncome(ym) {
+  const b = state.bank;
+  if (!b) return [];
+  const chk = new Set((b.accounts ?? []).filter(isCheckingAcc).map(a => a.id));
+  return (b.transactions ?? [])
+    .filter(t => chk.has(t.account_id) && t.amount > 0 && (t.happened_on ?? '').slice(0, 7) === ym);
+}
+
+/** התקציב לקופה: מה שקבעת ידנית, אחרת מה שהוקצה לה החודש. */
+function potBudget(pot, ym) {
+  const manual = state.budgets[pot.id];
+  if (manual != null && manual !== '') return Number(manual) || 0;
+  return Math.round(sum(state.txns.filter(t =>
+    t.pot_id === pot.id && (t.happened_on ?? '').slice(0, 7) === ym && t.amount > 0), t => t.amount) * 100) / 100;
+}
+
+function setBudget(potId, value) {
+  if (value === '' || value == null) delete state.budgets[potId];
+  else state.budgets[potId] = Number(value) || 0;
+  write(LS.budgets, state.budgets);
+}
+
+const DASH_BAR = '#3D74A8';   // גוון אחד — האורך הוא שנושא את המידע
+
+function renderDash(b) {
+  const ym = dashMonth;
+  const spendAll = monthSpend(ym);
+  const income = monthIncome(ym);
+  const real = bankAvailable();
+  const checking = bankChecking();
+
+  if (!state.bank) {
+    b.innerHTML = `<p class="wallet__empty">עוד לא נמשכו נתונים מהבנק. עברי ל״עדכון מהבנק״.</p>`;
+    return;
+  }
+
+  /* ---- הכותרת ---- */
+  const held = Math.round((checking - real) * 100) / 100;
+
+  /* ---- לפי חשבון ---- */
+  const accs = (state.bank.accounts ?? []).filter(a => isCardAcc(a) || isCheckingAcc(a));
+  const perAcc = accs.map(a => ({
+    acc: a,
+    total: Math.round(sum(spendAll.filter(x => x.acc?.id === a.id), x => x.amount) * 100) / 100,
+  })).filter(x => x.total > 0).sort((x, y) => y.total - x.total);
+
+  /* ---- לפי קטגוריה ---- */
+  const byCat = new Map();
+  spendAll.forEach(x => byCat.set(x.cat, Math.round(((byCat.get(x.cat) ?? 0) + x.amount) * 100) / 100));
+  const cats = [...byCat.entries()]
+    .map(([cat, total]) => ({ cat, total, label: CATS[cat]?.label ?? cat, kind: CATS[cat]?.kind ?? 'fun' }))
+    .sort((x, y) => y.total - x.total);
+  const catMax = cats[0]?.total ?? 1;
+  const spentTotal = Math.round(sum(cats, c => c.total) * 100) / 100;
+
+  /* ---- עסקי מול בזבוזים ---- */
+  const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
+  const biz = byKind('business');
+  const fun = byKind('fun');
+  const moved = byKind('skip');
+
+  const bizPot = businessPot();
+  const funPotObj = funPot();
+  const meters = [
+    { pot: bizPot, spent: biz, label: 'עסקי' },
+    { pot: funPotObj, spent: fun, label: 'בזבוזים' },
+  ].filter(m => m.pot);
+
+  /* ---- הרשימה ---- */
+  const spend = spendAll
+    .filter(x => dashAcc === 'all' || x.acc?.id === dashAcc)
+    .filter(x => dashCat === 'all' || x.cat === dashCat);
+
+  const groups = [];
+  spend.forEach(x => {
+    const d = x.txn.happened_on;
+    if (!groups.length || groups[groups.length - 1].on !== d) groups.push({ on: d, rows: [] });
+    groups[groups.length - 1].rows.push(x);
+  });
+
+  const rowHtml = x => `
+    <div class="dashrow">
+      <span class="dashrow__main">
+        <span class="dashrow__title">${esc(x.label)}</span>
+        <span class="dashrow__meta">
+          <span class="dashrow__acc">${esc(x.acc?.name ?? 'עו״ש')}</span>
+          <span class="catchip catchip--${x.kind === 'business' ? 'biz' : 'fun'}">${esc(CATS[x.cat]?.label ?? '')}</span>
+        </span>
+      </span>
+      <b class="dashrow__amount" dir="ltr">−${esc(money(x.amount))}</b>
+    </div>`;
+
+  const dayLabel = on => {
+    const d = new Date(on + 'T12:00:00');
+    return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
+  };
+
+  b.innerHTML = `
+    <div class="dashhead">
+      <button class="datenav__arrow" id="dashPrev" type="button" aria-label="חודש קודם">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="dashhead__month">${esc(heMonth(ym))}</span>
+      <button class="datenav__arrow" id="dashNext" type="button" aria-label="חודש הבא"${ym >= monthOf() ? ' disabled' : ''}>
+        <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+    <div class="dashhero">
+      <span class="dashhero__label">הכסף שבאמת שלך</span>
+      <b class="dashhero__amount" dir="ltr">${esc(money(real ?? 0))}</b>
+      <span class="dashhero__sub">
+        רשום בעו״ש ${esc(money(checking ?? 0))}${held ? ` · כבר הוצא וטרם נגבה ${esc(money(held))}` : ''}
+      </span>
+    </div>
+
+    <div class="dashstats">
+      <div class="dashstat"><span>יצא החודש</span><b dir="ltr">${esc(money(spentTotal))}</b></div>
+      <div class="dashstat"><span>נכנס החודש</span><b dir="ltr">${esc(money(sum(income, t => t.amount)))}</b></div>
+      <div class="dashstat"><span>מספר עסקאות</span><b dir="ltr">${spendAll.length}</b></div>
+    </div>
+
+    <h3 class="rep__h">לפי כרטיס</h3>
+    <div class="dashaccs">
+      <button class="dashacc${dashAcc === 'all' ? ' is-on' : ''}" type="button" data-acc="all">
+        <span class="dashacc__name">הכול</span>
+        <b dir="ltr">${esc(money(Math.round(sum(spendAll, x => x.amount) * 100) / 100))}</b>
+      </button>
+      ${perAcc.map(x => `
+        <button class="dashacc${dashAcc === x.acc.id ? ' is-on' : ''}" type="button" data-acc="${esc(x.acc.id)}">
+          <span class="dashacc__name">${esc(x.acc.name)}</span>
+          <b dir="ltr">${esc(money(x.total))}</b>
+        </button>`).join('')}
+    </div>
+
+    <h3 class="rep__h">לפי קטגוריה</h3>
+    ${cats.length ? `
+      <div class="catbars">
+        ${cats.map(c => `
+          <button class="catbar${dashCat === c.cat ? ' is-on' : ''}" type="button" data-cat="${esc(c.cat)}">
+            <span class="catbar__head">
+              <span class="catbar__name">${esc(c.label)}</span>
+              <b class="catbar__val" dir="ltr">${esc(money(c.total))}</b>
+            </span>
+            <span class="catbar__track">
+              <span class="catbar__fill" style="width:${Math.max(2, Math.round(c.total / catMax * 100))}%;background:${DASH_BAR}"></span>
+            </span>
+          </button>`).join('')}
+      </div>
+      <p class="chart__cap">האורך יחסי לקטגוריה הגדולה ביותר. לחיצה מסננת את הרשימה למטה.</p>`
+      : '<p class="wallet__empty">אין הוצאות בחודש הזה.</p>'}
+
+    <h3 class="rep__h">עסקי מול בזבוזים</h3>
+    <div class="splitcards">
+      <div class="splitcard" style="--pot:${esc(bizPot?.colour ?? '#2E86C1')}">
+        <span>עסקי</span><b dir="ltr">${esc(money(biz))}</b>
+      </div>
+      <div class="splitcard" style="--pot:${esc(funPotObj?.colour ?? '#0F8A57')}">
+        <span>בזבוזים</span><b dir="ltr">${esc(money(fun))}</b>
+      </div>
+      ${moved ? `<div class="splitcard splitcard--quiet"><span>העברות והחזרים</span><b dir="ltr">${esc(money(moved))}</b></div>` : ''}
+    </div>
+
+    <h3 class="rep__h">עמידה בתקציב</h3>
+    <div class="meters">
+      ${meters.map(m => {
+        const budget = potBudget(m.pot, ym);
+        const pct = budget > 0 ? Math.round(m.spent / budget * 100) : 0;
+        const over = budget > 0 && m.spent > budget;
+        return `
+        <div class="meter${over ? ' is-over' : ''}" style="--pot:${esc(m.pot.colour ?? '#3D74A8')}">
+          <div class="meter__head">
+            <span class="meter__name">${esc(m.pot.name)}</span>
+            <span class="meter__nums" dir="ltr">${esc(money(m.spent))} / ${budget > 0 ? esc(money(budget)) : '—'}</span>
+          </div>
+          <span class="meter__track">
+            <span class="meter__fill" style="width:${budget > 0 ? Math.min(100, pct) : 0}%"></span>
+          </span>
+          <div class="meter__foot">
+            ${budget > 0
+              ? over
+                ? `<b class="meter__over">חריגה של ${esc(money(Math.round((m.spent - budget) * 100) / 100))}</b>`
+                : `<span>נשאר ${esc(money(Math.round((budget - m.spent) * 100) / 100))} · ${pct}% נוצל</span>`
+              : '<span>לא נקבע תקציב לחודש הזה</span>'}
+            <label class="meter__set">
+              <span>תקציב</span>
+              <input class="meter__input" type="number" dir="ltr" min="0" step="10" inputmode="decimal"
+                     placeholder="אוטומטי" value="${state.budgets[m.pot.id] ?? ''}" data-budget="${esc(m.pot.id)}">
+            </label>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <h3 class="rep__h">כל התנועות${dashAcc !== 'all' || dashCat !== 'all' ? ' · מסונן' : ''}</h3>
+    ${dashAcc !== 'all' || dashCat !== 'all'
+      ? '<button class="btn btn--quiet dash__clear" id="dashClear" type="button">ניקוי הסינון</button>' : ''}
+    <div class="dashlist">
+      ${groups.length ? groups.map(g => `
+        <div class="dashday">
+          <div class="dashday__head">
+            <span>${esc(dayLabel(g.on))}</span>
+            <b dir="ltr">−${esc(money(Math.round(sum(g.rows, r => r.amount) * 100) / 100))}</b>
+          </div>
+          ${g.rows.map(rowHtml).join('')}
+        </div>`).join('')
+        : '<p class="wallet__empty">אין תנועות שמתאימות לסינון.</p>'}
+    </div>`;
+
+  $('#dashPrev', b).addEventListener('click', () => { dashMonth = shiftMonth(ym, -1); renderBank(); });
+  $('#dashNext', b).addEventListener('click', () => {
+    if (ym >= monthOf()) return;
+    dashMonth = shiftMonth(ym, 1);
+    renderBank();
+  });
+  $$('.dashacc', b).forEach(x => x.addEventListener('click', () => {
+    dashAcc = dashAcc === x.dataset.acc ? 'all' : x.dataset.acc;
+    renderBank();
+  }));
+  $$('.catbar', b).forEach(x => x.addEventListener('click', () => {
+    dashCat = dashCat === x.dataset.cat ? 'all' : x.dataset.cat;
+    renderBank();
+  }));
+  $('#dashClear', b)?.addEventListener('click', () => { dashAcc = 'all'; dashCat = 'all'; renderBank(); });
+  $$('.meter__input', b).forEach(x => x.addEventListener('change', () => {
+    setBudget(x.dataset.budget, x.value.trim());
+    renderBank();
+  }));
+}
+
 
 /* ---------- מסך העדכון מהבנק ---------- */
 
@@ -2484,8 +2754,7 @@ function syncRowHtml(r) {
     </div>`;
 }
 
-function renderBankSync() {
-  const b = bankSheet.body;
+function renderBankSync(b) {
   const plan = bankPlan();
 
   if (!plan) {
@@ -2618,13 +2887,36 @@ function coinDrop(anchor) {
   setTimeout(() => layer.remove(), 1400);
 }
 
+const BANK_TABS = [['dash', 'דשבורד'], ['pots', 'קופות'], ['sync', 'עדכון מהבנק']];
+
 function renderBank() {
-  if (bankView === 'sync') return renderBankSync();
+  const host = bankSheet.body;
+  if (!host) return;
+  host.innerHTML = `
+    <div class="banktabs" role="tablist">
+      ${BANK_TABS.map(([k, l]) => `
+        <button class="banktab${bankView === k ? ' is-on' : ''}" type="button"
+                role="tab" aria-selected="${bankView === k}" data-view="${k}">${l}</button>`).join('')}
+    </div>
+    <div id="bankPane"></div>`;
+
+  $$('.banktab', host).forEach(x => x.addEventListener('click', () => {
+    if (x.dataset.view === 'sync' && bankView !== 'sync') return openBankSync();
+    bankView = x.dataset.view;
+    renderBank();
+  }));
+
+  const pane = $('#bankPane', host);
+  if (bankView === 'sync') return renderBankSync(pane);
+  if (bankView === 'pots') return renderPots(pane);
+  return renderDash(pane);
+}
+
+function renderPots(b) {
   const pots = potsByPos();
   const total = accountTotal();
   const active = potById(bankPotId) ?? pots[0] ?? null;
   bankPotId = active?.id ?? null;
-  const b = bankSheet.body;
   const real = bankAvailable();
   const checking = bankChecking();
   const held = real == null ? 0 : Math.round((checking - real) * 100) / 100;
@@ -2656,17 +2948,9 @@ function renderBank() {
       <b dir="ltr" id="bankTotal">${esc(money(total))}</b>
     </div>
 
-    <div class="banksync">
-      ${real == null
-        ? '<p class="banksync__note">עוד לא נמשכו נתונים מהבנק.</p>'
-        : `<div class="banksync__facts">
-             <span>רשום בעו״ש <b dir="ltr">${esc(money(checking))}</b></span>
-             ${held ? `<span>כבר הוצא וטרם נגבה <b dir="ltr">−${esc(money(held))}</b></span>` : ''}
-             ${drift ? `<span class="banksync__drift">פער מול הקופות <b dir="ltr">${esc(money(drift))}</b></span>`
-                     : '<span class="banksync__ok">הקופות תואמות לבנק</span>'}
-           </div>`}
-      <button class="btn btn--quiet" id="bankSyncBtn" type="button">עדכון מהבנק</button>
-    </div>
+    ${real == null || !drift ? '' : `
+      <p class="banksync__note">הקופות מציגות ${esc(money(total))} והבנק אומר ${esc(money(real))}.
+      כדאי לרוץ על ״עדכון מהבנק״ כדי ליישר.</p>`}
 
     ${pots.length ? `<div class="potpills">${pills}</div>` : ''}
 
@@ -2697,7 +2981,6 @@ function renderBank() {
 
   $$('.potpill', b).forEach(x => x.addEventListener('click', () => { bankPotId = x.dataset.pot; renderBank(); }));
   $('#potAdd', b).addEventListener('click', () => openPotSheet(null));
-  $('#bankSyncBtn', b).addEventListener('click', openBankSync);
   if (!active) return;
 
   $('#potEdit', b).addEventListener('click', () => openPotSheet(active));
