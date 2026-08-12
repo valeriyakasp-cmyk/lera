@@ -920,9 +920,12 @@ function applyBankPlan(plan) {
     const note = [row.where, row.as === 'expense' ? CATS[row.cat]?.label : null]
       .filter(Boolean).join(' · ');
     if (row.as === 'income' && t.amount > 0) {
+      /* בשורה של חלוקה כותבים מאיזה תקבול היא הגיעה — אחרת רואים
+         סכום חלקי בלי להבין למה הוא לא שווה למה שנכנס לחשבון */
+      const share = `חלק מתקבול ${money(t.amount)}`;
       row.parts.forEach(({ pot, amount }) => addTxn({
         pot_id: pot.id, amount, happened_on: t.happened_on,
-        kind: 'split', title, source_id: t.id, note,
+        kind: 'split', title, source_id: t.id, note: share,
       }));
     } else {
       addTxn({
