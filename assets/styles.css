@@ -2012,3 +2012,26 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   padding: 9px 11px; border-radius: 10px;
   background: #FDF3F2; color: #8E2B23; border: 1px solid #F3DAD7;
 }
+
+/* ---------- סיווג ידני של כסף שנכנס ---------- */
+.inbox__row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px;
+  padding: 11px 0;
+}
+.inbox__row + .inbox__row { border-top: 1px solid rgba(17,17,17,.05); }
+.inbox__main { display: grid; gap: 1px; min-width: 0; }
+.inbox__main b { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox__main small { font-size: 11.5px; color: #9A9CA0; }
+.inbox__amt { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; color: #0B6E45; }
+.inbox__pick { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: #F2F3F5; }
+.pick {
+  font: inherit; font-size: 12px; font-weight: 600; color: #6B7076;
+  padding: 6px 13px; border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+}
+.pick.is-on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.09); }
+.inbox__row:not(.is-set) .inbox__pick { box-shadow: 0 0 0 2px #FCE9C9; }
+@media (max-width: 560px) {
+  .inbox__row { grid-template-columns: 1fr auto; }
+  .inbox__pick { grid-column: 1 / -1; justify-content: stretch; }
+  .pick { flex: 1; }
+}

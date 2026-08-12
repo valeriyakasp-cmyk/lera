@@ -686,8 +686,8 @@ function setCat(txn, cat) {
 function potForCat(cat) {
   const kind = CATS[cat]?.kind ?? 'fun';
   if (kind === 'business') return businessPot()?.id ?? null;
-  /* הוצאה שמחזירים עליה יושבת בחיסכון וממתינה להחזר — לא בבזבוזים */
-  if (kind === 'owed') return savingsPot()?.id ?? null;
+  /* מה שמחזירים עליו, וכן החזרים והעברות — יושבים בחיסכון, לא בבזבוזים */
+  if (kind === 'owed' || kind === 'skip') return savingsPot()?.id ?? null;
   return funPot()?.id ?? null;
 }
 
@@ -838,7 +838,7 @@ function bankTarget(t) {
   if (rule.as === 'income') return null;
   if (rule.pot_id) return rule.pot_id;
   const cat = catOf(t);
-  if (rule.as === 'skip') return funPot()?.id ?? potsByPos()[0]?.id ?? null;
+  if (rule.as === 'skip') return savingsPot()?.id ?? potsByPos()[0]?.id ?? null;
   return potForCat(cat) ?? potsByPos()[0]?.id ?? null;
 }
 
@@ -2871,6 +2871,9 @@ function renderOverview(b) {
   const rest = Math.round(sum(catsAll.slice(5), c => c.total) * 100) / 100;
   if (rest) slices.push({ cat: null, total: rest, label: 'אחר' });
 
+  /* כל תקבול של החודש — כדי שתסמני בעצמך מה הכנסה ומה החזר */
+  const cashIn = income.slice().sort((a, c) => String(c.happened_on).localeCompare(String(a.happened_on)));
+
   const dueCards = Math.round(sum(cards(), c => cardPending(c)) * 100) / 100;
   const potsTotal = accountTotal();
   const chargeDay = (() => {
@@ -2909,6 +2912,29 @@ function renderOverview(b) {
       </div>
       <p class="hero2__say">בחשבון רשום ${esc(money(checking))}, אבל ${esc(money(held))} כבר הוצאת בכרטיס האשראי והם ירדו בקרוב. מה שנשאר באמת שלך זה ${esc(money(real ?? 0))}.</p>
     </section>
+
+    ${cashIn.length ? `
+      <section class="card2 card2--wide inbox">
+        <h3 class="card2__title">כסף שנכנס — הכנסה או החזר?</h3>
+        <p class="card2__lead">הכנסה מתחלקת בין שלושת החשבונות. החזר נכנס כולו לחיסכון האישי ומקזז הוצאה ששילמת עבור מישהו.</p>
+        ${cashIn.map(t => {
+          const pick = state.bankmap[t.id]?.as;
+          return `
+          <div class="inbox__row${pick ? ' is-set' : ''}">
+            <span class="inbox__main">
+              <b>${esc(bankLabel(t))}</b>
+              <small>${esc(dayHe(t.happened_on))}</small>
+            </span>
+            <b class="inbox__amt" dir="ltr">${esc(money(t.amount))}</b>
+            <span class="inbox__pick">
+              <button class="pick${pick === 'income' ? ' is-on' : ''}" type="button"
+                      data-in="${esc(t.id)}" data-as="income">הכנסה</button>
+              <button class="pick${pick === 'skip' ? ' is-on' : ''}" type="button"
+                      data-in="${esc(t.id)}" data-as="skip">החזר</button>
+            </span>
+          </div>`;
+        }).join('')}
+      </section>` : ''}
 
     <section class="card2 card2--wide duecard">
       <h3 class="card2__title">מה עוד אמור לרדת</h3>
@@ -3022,6 +3048,12 @@ function renderOverview(b) {
       </section>` : ''}
   </div>`;
 
+  $$('.pick', b).forEach(x => x.addEventListener('click', () => {
+    setBankRule(x.dataset.in, { as: x.dataset.as, pot_id: null });
+    if (state.pots.length && state.bank) applyBankPlan(bankPlan());
+    renderMoney();
+    toast(x.dataset.as === 'income' ? 'סומן כהכנסה והתחלק בין החשבונות' : 'סומן כהחזר ונכנס לחיסכון');
+  }));
   $$('.ovmeter__input', b).forEach(x => x.addEventListener('change', () => {
     setBudget(x.dataset.budget, x.value.trim());
     renderMoney();
