@@ -1995,3 +1995,20 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .stmt__note { font-size: 11.5px; color: #9A9CA0; }
 .stmt__amt { font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
 .stmt__amt.is-in { color: #0B6E45; }
+
+/* ---------- מה עוד אמור לרדת ---------- */
+.due { display: grid; gap: 2px; }
+.due__row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 9px 0; font-size: 13.5px;
+}
+.due__row + .due__row { border-top: 1px solid rgba(17,17,17,.05); }
+.due__row b { font-variant-numeric: tabular-nums; font-weight: 600; color: #B4342B; }
+.due__row--sum { border-top: 1px solid rgba(17,17,17,.12) !important; font-weight: 700; }
+.due__row--sum b { font-size: 16px; }
+
+.card2__warn {
+  font-size: 12px; line-height: 1.65; margin: 0;
+  padding: 9px 11px; border-radius: 10px;
+  background: #FDF3F2; color: #8E2B23; border: 1px solid #F3DAD7;
+}

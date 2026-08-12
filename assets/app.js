@@ -2842,6 +2842,15 @@ function renderOverview(b) {
   const rest = Math.round(sum(catsAll.slice(5), c => c.total) * 100) / 100;
   if (rest) slices.push({ cat: null, total: rest, label: 'אחר' });
 
+  const dueCards = Math.round(sum(cards(), c => cardPending(c)) * 100) / 100;
+  const potsTotal = accountTotal();
+  const chargeDay = (() => {
+    const a = bankAnchor();
+    const d = new Date(a + 'T12:00:00');
+    const next = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    return next.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
+  })();
+
   const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
   const owedOut = byKind('owed');
   const owedBack = refundsIn(ym);
@@ -2872,8 +2881,28 @@ function renderOverview(b) {
       <p class="hero2__say">בחשבון רשום ${esc(money(checking))}, אבל ${esc(money(held))} כבר הוצאת בכרטיס האשראי והם ירדו בקרוב. מה שנשאר באמת שלך זה ${esc(money(real ?? 0))}.</p>
     </section>
 
+    <section class="card2 card2--wide duecard">
+      <h3 class="card2__title">מה עוד אמור לרדת</h3>
+      <p class="card2__lead">${dueCards ? `ביום ${esc(chargeDay)} ירד חיוב האשראי. שלושת החשבונות שלמטה כבר לוקחים את זה בחשבון — הכסף הזה כבר לא נספר אצלך.` : 'אין חיוב אשראי שממתין.'}</p>
+      ${dueCards ? `
+        <div class="due">
+          ${cards().filter(c => cardPending(c) > 0).map(c => `
+            <div class="due__row">
+              <span>${esc(c.name)}</span>
+              <b dir="ltr">${esc(money(cardPending(c)))}</b>
+            </div>`).join('')}
+          <div class="due__row due__row--sum">
+            <span>סה״כ שירד</span>
+            <b dir="ltr">${esc(money(dueCards))}</b>
+          </div>
+        </div>` : ''}
+    </section>
+
     <section class="card2">
       <h3 class="card2__title">החשבונות שלי</h3>
+      ${Math.abs(potsTotal - (real ?? 0)) > 1 ? `
+        <p class="card2__warn">החשבונות מציגים ${esc(money(potsTotal))} אבל באמת יש ${esc(money(real ?? 0))}.
+        לחצי על ״עדכון״ למעלה ואז על ״בנייה מחדש מהבנק״ בלשונית החשבונות.</p>` : ''}
       ${potsByPos().map(p => `
         <button class="acct acct--btn" type="button" data-pot="${p.id}" style="--pot:${esc(p.colour ?? '#3D74A8')}">
           <span class="acct__dot"></span>
@@ -3838,7 +3867,10 @@ $('#mRefresh')?.addEventListener('click', async () => {
   btn.disabled = true;
   try {
     await fetchBank();
-    toast('הנתונים עודכנו מהבנק');
+    /* מסדרים מיד את שלושת החשבונות לפי מה שהבנק אומר, כדי שלא
+       יהיה צורך להזין כלום ידנית — כל קנייה נכנסת לקופה שלה. */
+    if (state.pots.length) applyBankPlan(bankPlan());
+    toast('הנתונים עודכנו וכל קנייה שובצה לחשבון שלה');
   } catch (err) {
     toast(err.message);
   } finally {
