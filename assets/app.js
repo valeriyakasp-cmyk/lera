@@ -622,6 +622,7 @@ const CATS = {
   stock:     { label: 'מאגרי מדיה',      kind: 'business' },
   office:    { label: 'ציוד משרדי',      kind: 'business' },
   clients:   { label: 'לקוחות וספקים',   kind: 'business' },
+  vet:       { label: 'וטרינר',          kind: 'owed' },
   pets:      { label: 'חיות מחמד',       kind: 'fun' },
   grocery:   { label: 'סופר ומכולת',     kind: 'fun' },
   food:      { label: 'אוכל בחוץ',       kind: 'fun' },
@@ -638,7 +639,8 @@ const CATS = {
 
 /* הכלל הראשון שמתאים קובע, אז הספציפי בא לפני הכללי. */
 const MERCHANT_RULES = [
-  [/וטרינר|פט\s?מקס|petmax|חיות|כלבו|animal|VET\b|דוקטור\s?פט/i, 'pets'],
+  [/וטרינר|וטרינרי|\bvet\b|דוקטור\s?פט|מרפאה\s?וטרינרית/i, 'vet'],
+  [/פט\s?מקס|petmax|חנות\s?חיות|כלבו|animal|פטשופ|pet\s?shop/i, 'pets'],
   [/luma|magnific|higgsfield|krea|runway|elevenlabs|midjourney|openai|chatgpt|anthropic|claude|suno|kling|pika|ideogram|freepik|leonardo|kinovi|heygen|sora|veo|recraft|topaz|descript/i, 'ai'],
   [/google|workspace|microsoft|adobe|figma|canva|notion|dropbox|github|vercel|netlify|cloudflare|supabase|zoom|slack|apple\.com|itunes|spotify|openrouter|namecheap|godaddy|wix/i, 'software'],
   [/envato|shutterstock|artlist|epidemic|storyblocks|motion\s?array|unsplash|getty/i, 'stock'],
@@ -683,8 +685,14 @@ function setCat(txn, cat) {
 /** לאיזו קופה הקטגוריה שייכת. */
 function potForCat(cat) {
   const kind = CATS[cat]?.kind ?? 'fun';
-  return kind === 'business' ? businessPot()?.id ?? null : funPot()?.id ?? null;
+  if (kind === 'business') return businessPot()?.id ?? null;
+  /* הוצאה שמחזירים עליה יושבת בחיסכון וממתינה להחזר — לא בבזבוזים */
+  if (kind === 'owed') return savingsPot()?.id ?? null;
+  return funPot()?.id ?? null;
 }
+
+/** קופת החיסכון — גם המאגר שממנו מכסים חוסר בקופה אחרת. */
+const savingsPot = () => state.pots.find(p => p.name === 'חיסכון אישי') ?? potsByPos()[0] ?? null;
 
 /* ---------- קריאת התמונה מהבנק ---------- */
 
@@ -924,6 +932,22 @@ function applyBankPlan(plan) {
       });
     }
   });
+
+  /* קופה לא נשארת במינוס: החוסר מכוסה מהחיסכון, בשורה מפורשת,
+     כדי שיהיה ברור שנגמר התקציב ומאיפה הושלם. */
+  const buffer = savingsPot();
+  if (buffer) {
+    potsByPos().forEach(p => {
+      if (p.id === buffer.id) return;
+      const bal = potBalance(p.id);
+      if (bal >= -0.005) return;
+      const gap = Math.round(-bal * 100) / 100;
+      addTxn({ pot_id: p.id, amount: gap, happened_on: isoDate(),
+               kind: 'transfer', title: 'השלמה מהחיסכון', note: 'נגמר התקציב בקופה' });
+      addTxn({ pot_id: buffer.id, amount: -gap, happened_on: isoDate(),
+               kind: 'transfer', title: `השלמה ל${p.name}`, note: 'כיסוי חוסר' });
+    });
+  }
 
   /* ההוצאות הידניות הופכות לרשימת מעקב — הבנק כבר גובה אותן */
   state.expenses.forEach(e => {
@@ -2505,7 +2529,9 @@ function monthSpend(ym) {
     .filter(t => cardIds.has(t.account_id) || !CARD_CHARGE.test(bankLabel(t)))
     .map(t => {
       const cat = catOf(t);
-      const owed = state.bankmap[t.id]?.owed === true;
+      /* וטרינר תמיד מוחזר, אלא אם סומן אחרת ידנית */
+      const flag = state.bankmap[t.id]?.owed;
+      const owed = flag === undefined ? CATS[cat]?.kind === 'owed' : flag === true;
       return {
         txn: t, cat, owed,
         label: bankLabel(t),
