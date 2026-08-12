@@ -1923,3 +1923,75 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .ov__h { font-size: 12.5px; font-weight: 600; color: #8A8C90; margin: 0; }
 .ov__note { font-size: 11.5px; color: #9A9CA0; line-height: 1.6; margin: 0; }
 .ov__note b { font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* ---------- שפה פשוטה, חשבונות וירטואליים ---------- */
+.card2__lead { font-size: 12.5px; color: #8A8C90; line-height: 1.65; margin: -4px 0 0; }
+.hero2__say { font-size: 12.5px; color: #8A8C90; line-height: 1.7; margin: 4px 0 0; }
+
+.refreshbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: #55565A;
+  padding: 6px 12px; border: 1px solid rgba(17,17,17,.1); border-radius: 999px;
+  background: #fff; cursor: pointer; margin-inline-start: 10px;
+}
+.refreshbtn svg { width: 14px; height: 14px; }
+.refreshbtn.is-busy svg { animation: spin 900ms linear infinite; }
+.refreshbtn:disabled { opacity: .55; }
+@keyframes spin { to { transform: rotate(-360deg); } }
+
+.acct--btn {
+  width: 100%; font: inherit; text-align: start; cursor: pointer;
+  border: 0; background: none; padding: 10px 0;
+}
+.acct__dot {
+  width: 34px; height: 34px; flex: none; border-radius: 11px;
+  background: color-mix(in srgb, var(--pot) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pot) 30%, transparent);
+}
+
+.backbtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: inherit; font-size: 13px; font-weight: 600; color: #55565A;
+  border: 0; background: none; padding: 4px 0; cursor: pointer;
+}
+.backbtn svg { width: 16px; height: 16px; }
+
+.acctsum { display: flex; justify-content: center; gap: 22px; font-size: 12.5px; color: #8A8C90; }
+.acctsum b { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.acctsum .is-in { color: #0B6E45; }
+
+.accts { display: grid; gap: 2px; }
+.acctcard {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  font: inherit; text-align: start; cursor: pointer;
+  padding: 12px 0; border: 0; background: none;
+}
+.acctcard + .acctcard { border-top: 1px solid rgba(17,17,17,.05); }
+.acctcard__dot {
+  width: 38px; height: 38px; flex: none; border-radius: 12px;
+  background: color-mix(in srgb, var(--pot) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pot) 30%, transparent);
+}
+.acctcard__main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.acctcard__main b { font-size: 14.5px; font-weight: 600; }
+.acctcard__main small { font-size: 11.5px; color: #9A9CA0; }
+.acctcard__end { display: flex; align-items: center; gap: 6px; flex: none; color: #B9BBBF; }
+.acctcard__end b { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.acctcard__end svg { width: 16px; height: 16px; }
+.accts__sum {
+  display: flex; justify-content: space-between; gap: 12px;
+  border-top: 1px solid rgba(17,17,17,.07); padding-top: 12px;
+  font-size: 13px; color: #8A8C90;
+}
+.accts__sum b { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 700; }
+
+.stmt { gap: 18px; }
+.stmt__day { display: grid; gap: 2px; }
+.stmt__date { font-size: 11.5px; font-weight: 600; color: #9A9CA0; margin-bottom: 4px; }
+.stmt__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; }
+.stmt__row + .stmt__row { border-top: 1px solid rgba(17,17,17,.05); }
+.stmt__main { display: grid; gap: 1px; min-width: 0; }
+.stmt__title { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.stmt__note { font-size: 11.5px; color: #9A9CA0; }
+.stmt__amt { font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
+.stmt__amt.is-in { color: #0B6E45; }

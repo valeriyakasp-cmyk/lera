@@ -2564,12 +2564,15 @@ let appMode  = 'day';      // day | money
 let moneyTab = 'overview'; // overview | txns | subs | flow | pots
 
 const MONEY_TABS = [
-  ['overview', 'סקירה'],
-  ['txns',     'תנועות'],
-  ['subs',     'מנויים'],
-  ['flow',     'הכנסות והוצאות'],
-  ['pots',     'קופות'],
+  ['overview',  'סקירה'],
+  ['accounts',  'החשבונות שלי'],
+  ['txns',      'כל התנועות'],
+  ['subs',      'מנויים'],
+  ['flow',      'הכנסות והוצאות'],
 ];
+
+/** החשבון שנפתח לצפייה בתנועות. null = רשימת החשבונות. */
+let openAcct = null;
 
 const shell = () => document.querySelector('.shell');
 
@@ -2595,7 +2598,7 @@ function renderMoney() {
 
   $('#mLabel').textContent = heMonth(dashMonth);
   $('#mNext').disabled = dashMonth >= monthOf();
-  $('#moneyMonth').hidden = moneyTab === 'pots';
+  $('#moneyMonth').hidden = false;
 
   nav.innerHTML = MONEY_TABS.map(([k, l]) => `
     <button class="moneytab${moneyTab === k ? ' is-on' : ''}" type="button"
@@ -2608,10 +2611,10 @@ function renderMoney() {
   walletMonth = dashMonth;
 
   if (moneyTab === 'overview') return renderOverview(pane);
+  if (moneyTab === 'accounts') return renderAccounts(pane);
   if (moneyTab === 'txns')     return renderTxns(pane);
   if (moneyTab === 'subs')     return renderWallet(pane, 'subs');
-  if (moneyTab === 'flow')     return renderWallet(pane, 'flow');
-  return renderPotsPane(pane);
+  return renderWallet(pane, 'flow');
 }
 
 let potsView = 'pots';   // pots | sync
@@ -2619,37 +2622,138 @@ let potsView = 'pots';   // pots | sync
 /** מרענן את המסך הפיננסי, לא משנה מאיזה חלק קראו לו. */
 const refreshFinance = () => (appMode === 'money' ? renderMoney() : renderBank());
 
-function renderPotsPane(pane) {
-  if (potsView === 'sync') return renderBankSync(pane);
-  const cs = cards();
-  pane.innerHTML = `
-    <div class="potspane">
-      ${cs.length ? `
-        <div class="cardest">
-          <h3 class="ov__h">חיוב אשראי צפוי</h3>
-          <p class="ov__note">אני מעריך לפי הקניות שעוד לא נגבו. אם באפליקציה של חברת האשראי כתוב מספר אחר — פשוט הקלידי אותו, והוא זה שיקבע.</p>
-          ${cs.map(c => `
-            <div class="cardest__row">
-              <span class="cardest__name">${esc(c.name)}</span>
-              <b class="cardest__val" dir="ltr">${esc(money(cardPending(c)))}</b>
-              <input class="cardest__input" type="number" dir="ltr" min="0" step="1" inputmode="decimal"
-                     placeholder="לפי החישוב" value="${state.cardest[c.id] ?? ''}" data-card="${esc(c.id)}"
-                     aria-label="חיוב צפוי ל${esc(c.name)}">
-            </div>`).join('')}
-        </div>` : ''}
+/* ---------- החשבונות שלי — שלושה חשבונות וירטואליים ---------- */
 
-      <div class="potspane__head">
-        <button class="btn btn--quiet" id="paneSync" type="button">עדכון מהבנק</button>
+/** הסבר בשפה פשוטה לכל קופה, כדי שברור למה היא נועדה. */
+const POT_HINT = {
+  'חיסכון אישי': 'כסף ששמור ולא נוגעים בו',
+  'קופה עסקית':  'הוצאות של העבודה',
+  'בזבוזים':     'הוצאות אישיות ויומיומיות',
+};
+
+/** תנועות של חשבון בחודש מסוים, מהחדש לישן. */
+const acctMonth = (potId, ym) => state.txns
+  .filter(t => t.pot_id === potId && (t.happened_on ?? '').slice(0, 7) === ym)
+  .sort((a, b) => String(b.happened_on).localeCompare(String(a.happened_on)) ||
+                  String(b.created_at).localeCompare(String(a.created_at)));
+
+const dayHe = on => new Date(on + 'T12:00:00')
+  .toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
+
+function renderAccounts(pane) {
+  const ym = dashMonth;
+  const pots = potsByPos();
+
+  /* ---- מסך אחד: התנועות של חשבון ---- */
+  const acct = potById(openAcct);
+  if (acct) {
+    const rows = acctMonth(acct.id, ym);
+    const inSum  = Math.round(sum(rows.filter(t => t.amount > 0), t => t.amount) * 100) / 100;
+    const outSum = Math.round(sum(rows.filter(t => t.amount < 0), t => -t.amount) * 100) / 100;
+
+    const groups = [];
+    rows.forEach(t => {
+      const d = t.happened_on ?? '';
+      if (!groups.length || groups[groups.length - 1].on !== d) groups.push({ on: d, rows: [] });
+      groups[groups.length - 1].rows.push(t);
+    });
+
+    pane.innerHTML = `
+      <button class="backbtn" id="acctBack" type="button">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>לכל החשבונות</span>
+      </button>
+
+      <section class="card2 card2--hero card2--wide" style="--pot:${esc(acct.colour ?? '#3D74A8')}">
+        <span class="card2__eyebrow">${esc(acct.name)}</span>
+        <b class="hero2__amount" dir="ltr">${esc(money(potBalance(acct.id)))}</b>
+        <div class="acctsum">
+          <span>נכנס החודש <b class="is-in" dir="ltr">${esc(money(inSum))}</b></span>
+          <span>יצא החודש <b dir="ltr">${esc(money(outSum))}</b></span>
+        </div>
+      </section>
+
+      <section class="card2 card2--wide stmt">
+        ${groups.length ? groups.map(g => `
+          <div class="stmt__day">
+            <div class="stmt__date">${esc(dayHe(g.on))}</div>
+            ${g.rows.map(t => `
+              <div class="stmt__row">
+                <span class="stmt__main">
+                  <span class="stmt__title">${esc(t.title ?? TXN_LABEL[t.kind] ?? 'תנועה')}</span>
+                  ${t.note ? `<span class="stmt__note">${esc(t.note)}</span>` : ''}
+                </span>
+                <b class="stmt__amt${t.amount >= 0 ? ' is-in' : ''}" dir="ltr">
+                  ${t.amount >= 0 ? '+' : '−'}${esc(money(Math.abs(t.amount)))}
+                </b>
+              </div>`).join('')}
+          </div>`).join('')
+          : '<p class="wallet__empty">אין תנועות בחודש הזה.</p>'}
+      </section>`;
+
+    $('#acctBack', pane).addEventListener('click', () => { openAcct = null; renderMoney(); });
+    return;
+  }
+
+  /* ---- רשימת החשבונות ---- */
+  if (potsView === 'sync') return renderBankSync(pane);
+
+  const cs = cards();
+  const total = accountTotal();
+
+  pane.innerHTML = `
+    <section class="card2 card2--wide">
+      <h3 class="card2__title">החשבונות שלי</h3>
+      <p class="card2__lead">הכסף שבחשבון הבנק מחולק לשלושה חשבונות. זה חלוקה על המסך בלבד — בבנק זה נשאר חשבון אחד.</p>
+      <div class="accts">
+        ${pots.map(p => `
+          <button class="acctcard" type="button" data-pot="${p.id}" style="--pot:${esc(p.colour ?? '#3D74A8')}">
+            <span class="acctcard__dot"></span>
+            <span class="acctcard__main">
+              <b>${esc(p.name)}</b>
+              <small>${esc(POT_HINT[p.name] ?? '')}</small>
+            </span>
+            <span class="acctcard__end">
+              <b dir="ltr">${esc(money(potBalance(p.id)))}</b>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </button>`).join('')}
       </div>
-      <div id="potsHost"></div>
-    </div>`;
+      <div class="accts__sum"><span>סה״כ</span><b dir="ltr">${esc(money(total))}</b></div>
+    </section>
+
+    ${cs.length ? `
+      <section class="card2 card2--wide">
+        <h3 class="card2__title">חיוב האשראי הבא</h3>
+        <p class="card2__lead">זה מה שאני מעריך שירד לך מהחשבון בחיוב הקרוב. אם באפליקציה של האשראי כתוב אחרת — פשוט הקלידי את המספר הנכון.</p>
+        ${cs.map(c => `
+          <div class="cardest__row">
+            <span class="cardest__name">${esc(c.name)}</span>
+            <b class="cardest__val" dir="ltr">${esc(money(cardPending(c)))}</b>
+            <input class="cardest__input" type="number" dir="ltr" min="0" step="1" inputmode="decimal"
+                   placeholder="מספר משלך" value="${state.cardest[c.id] ?? ''}" data-card="${esc(c.id)}"
+                   aria-label="חיוב צפוי ל${esc(c.name)}">
+          </div>`).join('')}
+      </section>` : ''}
+
+    <section class="card2 card2--wide">
+      <h3 class="card2__title">בנייה מחדש מהבנק</h3>
+      <p class="card2__lead">מסדר את שלושת החשבונות מחדש לפי מה שקרה באמת בבנק.</p>
+      <button class="btn btn--quiet" id="paneSync" type="button">פתיחת המסך</button>
+    </section>`;
+
+  $$('.acctcard', pane).forEach(x => x.addEventListener('click', () => {
+    openAcct = x.dataset.pot;
+    renderMoney();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }));
   $$('.cardest__input', pane).forEach(x => x.addEventListener('change', () => {
     setCardEst(x.dataset.card, x.value.trim());
     refreshFinance();
   }));
   $('#paneSync', pane).addEventListener('click', openBankSync);
-  renderPots($('#potsHost', pane));
 }
+
 
 /* ---------- סקירה — לוח מחוונים ---------- */
 
@@ -2738,10 +2842,6 @@ function renderOverview(b) {
   const rest = Math.round(sum(catsAll.slice(5), c => c.total) * 100) / 100;
   if (rest) slices.push({ cat: null, total: rest, label: 'אחר' });
 
-  const cs = cards();
-  const cardsNow = Math.round(sum(cs, c => cardPending(c)) * 100) / 100;
-  const cardsPrev = Math.round(sum(cs, c => Math.abs(Number(c.balance) || 0)) * 100) / 100;
-
   const byKind = k => Math.round(sum(spendAll.filter(x => x.kind === k), x => x.amount) * 100) / 100;
   const owedOut = byKind('owed');
   const owedBack = refundsIn(ym);
@@ -2759,47 +2859,40 @@ function renderOverview(b) {
   <div class="dash2">
 
     <section class="card2 card2--hero card2--wide">
-      <span class="card2__eyebrow">פנוי עכשיו</span>
+      <span class="card2__eyebrow">כמה כסף באמת יש לי</span>
       <b class="hero2__amount" dir="ltr">${esc(money(real ?? 0))}</b>
-      <div class="hero2__bar" role="img" aria-label="פנוי מול אשראי">
+      <div class="hero2__bar" role="img" aria-label="כסף פנוי מול כסף שכבר הוצא">
         <span class="hero2__green" style="width:${greenPct}%"></span>
         <span class="hero2__red" style="width:${100 - greenPct}%"></span>
       </div>
       <div class="hero2__legend">
-        <span><i class="dot dot--green"></i>בעו״ש <b dir="ltr">${esc(money(checking))}</b></span>
-        <span><i class="dot dot--red"></i>אשראי <b dir="ltr">${esc(money(held))}</b></span>
+        <span><i class="dot dot--green"></i>בחשבון <b dir="ltr">${esc(money(checking))}</b></span>
+        <span><i class="dot dot--red"></i>כבר הוצאתי בכרטיס <b dir="ltr">${esc(money(held))}</b></span>
       </div>
+      <p class="hero2__say">בחשבון רשום ${esc(money(checking))}, אבל ${esc(money(held))} כבר הוצאת בכרטיס האשראי והם ירדו בקרוב. מה שנשאר באמת שלך זה ${esc(money(real ?? 0))}.</p>
     </section>
 
     <section class="card2">
-      <h3 class="card2__title">חשבונות</h3>
-      <div class="acct">
-        <span class="acct__ico" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 20 8H4l8-4.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M6 11v6M10 11v6M14 11v6M18 11v6M3.5 19.5h17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        </span>
-        <span class="acct__main"><b>עו״ש</b></span>
-        <b class="acct__val" dir="ltr">${esc(money(checking))}</b>
-      </div>
-      <div class="acct">
-        <span class="acct__ico" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="13" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.6"/></svg>
-        </span>
-        <span class="acct__main"><b>אשראי</b><small>קודם ${esc(money(cardsPrev))}</small></span>
-        <b class="acct__val acct__val--red" dir="ltr">${esc(money(cardsNow))}</b>
-      </div>
+      <h3 class="card2__title">החשבונות שלי</h3>
+      ${potsByPos().map(p => `
+        <button class="acct acct--btn" type="button" data-pot="${p.id}" style="--pot:${esc(p.colour ?? '#3D74A8')}">
+          <span class="acct__dot"></span>
+          <span class="acct__main"><b>${esc(p.name)}</b><small>${esc(POT_HINT[p.name] ?? '')}</small></span>
+          <b class="acct__val" dir="ltr">${esc(money(potBalance(p.id)))}</b>
+        </button>`).join('')}
     </section>
 
     <section class="card2">
       <h3 class="card2__title">החודש</h3>
       <div class="m3">
         <div class="m3__cell"><span>נכנס</span><b class="is-in" dir="ltr">${esc(money(earned))}</b>${trend(pct(earned, pIn), true)}</div>
-        <div class="m3__cell"><span>יצא</span><b dir="ltr">${esc(money(spentTotal))}</b>${trend(pct(spentTotal, pOut), false)}</div>
+        <div class="m3__cell"><span>הוצאתי</span><b dir="ltr">${esc(money(spentTotal))}</b>${trend(pct(spentTotal, pOut), false)}</div>
         <div class="m3__cell"><span>נשאר</span><b class="${net < 0 ? 'is-out' : 'is-in'}" dir="ltr">${esc(money(net))}</b></div>
       </div>
     </section>
 
     <section class="card2">
-      <h3 class="card2__title">על מה יצא</h3>
+      <h3 class="card2__title">על מה הוצאתי</h3>
       ${slices.length ? `
         <div class="pie">
           <div class="pie__art">
@@ -2818,7 +2911,7 @@ function renderOverview(b) {
     </section>
 
     <section class="card2">
-      <h3 class="card2__title">חוזר כל חודש</h3>
+      <h3 class="card2__title">משלמת כל חודש</h3>
       ${rec.length ? `<div class="rec">${rec.map(r => `
         <div class="rec__row">
           <span class="rec__name">${esc(r.label)}</span>
@@ -2832,7 +2925,7 @@ function renderOverview(b) {
 
     ${owedOut || owedBack ? `
       <section class="card2 card2--wide">
-        <h3 class="card2__title">מחזירים לי</h3>
+        <h3 class="card2__title">כסף שמחזירים לי</h3>
         <div class="owed2__nums">
           <span>שילמתי <b dir="ltr">${esc(money(owedOut))}</b></span>
           <span>חזר <b dir="ltr">${esc(money(owedBack))}</b></span>
@@ -2843,7 +2936,7 @@ function renderOverview(b) {
 
     ${meters.length ? `
       <section class="card2 card2--wide">
-        <h3 class="card2__title">תקציב</h3>
+        <h3 class="card2__title">כמה מותר לי להוציא</h3>
         <div class="ovmeters">
           ${meters.map(m => {
             const budget = potBudget(m.pot, ym);
@@ -2873,6 +2966,11 @@ function renderOverview(b) {
 
   $$('.ovmeter__input', b).forEach(x => x.addEventListener('change', () => {
     setBudget(x.dataset.budget, x.value.trim());
+    renderMoney();
+  }));
+  $$('.acct--btn', b).forEach(x => x.addEventListener('click', () => {
+    openAcct = x.dataset.pot;
+    moneyTab = 'accounts';
     renderMoney();
   }));
   $$('.pie__legend li[data-cat]', b).forEach(x => x.addEventListener('click', () => {
@@ -3734,6 +3832,21 @@ $$('[data-split-close]').forEach(x => x.addEventListener('click', () => {
 $('#bankBtn')?.addEventListener('click', () => { moneyTab = 'overview'; setMode('money'); });
 $('#modeDay')?.addEventListener('click', () => setMode('day'));
 $('#modeMoney')?.addEventListener('click', () => setMode('money'));
+$('#mRefresh')?.addEventListener('click', async () => {
+  const btn = $('#mRefresh');
+  btn.classList.add('is-busy');
+  btn.disabled = true;
+  try {
+    await fetchBank();
+    toast('הנתונים עודכנו מהבנק');
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.classList.remove('is-busy');
+    btn.disabled = false;
+    renderMoney();
+  }
+});
 $('#mPrev')?.addEventListener('click', () => { dashMonth = shiftMonth(dashMonth, -1); renderMoney(); });
 $('#mNext')?.addEventListener('click', () => {
   if (dashMonth >= monthOf()) return;
