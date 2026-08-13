@@ -1828,6 +1828,9 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   padding: 5px 6px; border: 1px solid var(--line); border-radius: var(--r-xs);
   background: var(--surface); color: var(--ink);
 }
+.cardest__row--sum { border-color: rgba(17,17,17,.16); background: #FAFAF8; }
+.cardest__row--sum .cardest__name { font-size: 14px; }
+.cardest__row--sum .cardest__val { font-size: 18px; font-weight: 700; color: #B4342B; }
 
 /* ---------- לוח מחוונים ---------- */
 .dash2 { display: grid; gap: 12px; grid-template-columns: 1fr; }
@@ -1984,6 +1987,19 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
   font-size: 13px; color: #8A8C90;
 }
 .accts__sum b { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 700; }
+
+/* ---------- עו״ש מול מה שבאמת שלי ---------- */
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cmp__cell {
+  display: grid; gap: 3px; padding: 14px 14px 13px;
+  border-radius: 16px; background: #FAFAF8; border: 1px solid rgba(17,17,17,.06);
+}
+.cmp__cell > span { font-size: 12px; color: #8A8C90; }
+.cmp__cell > b { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: #8A8C90; }
+.cmp__cell > small { font-size: 11px; color: #A6A8AC; }
+.cmp__cell--mine { background: #F1F6F3; border-color: rgba(11,110,69,.18); }
+.cmp__cell--mine > b { color: #0B6E45; }
+.cmp__note { font-size: 12px; line-height: 1.7; color: #8A8C90; margin: 0; }
 
 .stmt { gap: 18px; }
 .stmt__day { display: grid; gap: 2px; }

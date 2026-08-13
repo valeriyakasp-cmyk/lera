@@ -2729,11 +2729,27 @@ function renderAccounts(pane) {
 
   const cs = cards();
   const total = accountTotal();
+  const chk = bankChecking();
+  const gap = chk == null ? 0 : Math.round((chk - total) * 100) / 100;
 
   pane.innerHTML = `
     <section class="card2 card2--wide">
       <h3 class="card2__title">החשבונות שלי</h3>
       <p class="card2__lead">הכסף שבחשבון הבנק מחולק לשלושה חשבונות. זה חלוקה על המסך בלבד — בבנק זה נשאר חשבון אחד.</p>
+      ${chk == null ? '' : `
+        <div class="cmp">
+          <div class="cmp__cell">
+            <span>רשום בעו״ש</span>
+            <b dir="ltr">${esc(money(chk))}</b>
+            <small>המספר שרואים בבנק</small>
+          </div>
+          <div class="cmp__cell cmp__cell--mine">
+            <span>באמת שלי</span>
+            <b dir="ltr">${esc(money(total))}</b>
+            <small>מה שמחולק בקופות</small>
+          </div>
+        </div>
+        ${gap > 0.005 ? `<p class="cmp__note">${esc(money(gap))} מתוך העו״ש כבר מיועדים לחיוב האשראי הקרוב ולכסף שמגיע לאחרים — לכן הם לא נספרים בקופות.</p>` : ''}`}
       <div class="accts">
         ${pots.map(p => `
           <button class="acctcard" type="button" data-pot="${p.id}" style="--pot:${esc(p.colour ?? '#3D74A8')}">
@@ -2748,7 +2764,7 @@ function renderAccounts(pane) {
             </span>
           </button>`).join('')}
       </div>
-      <div class="accts__sum"><span>סה״כ</span><b dir="ltr">${esc(money(total))}</b></div>
+      <div class="accts__sum"><span>סה״כ בשלושת החשבונות</span><b dir="ltr">${esc(money(total))}</b></div>
     </section>
 
     ${cs.length ? `
@@ -2763,6 +2779,11 @@ function renderAccounts(pane) {
                    placeholder="מספר משלך" value="${state.cardest[c.id] ?? ''}" data-card="${esc(c.id)}"
                    aria-label="חיוב צפוי ל${esc(c.name)}">
           </div>`).join('')}
+        <div class="cardest__row cardest__row--sum">
+          <span class="cardest__name">סה״כ שירד בסוף החודש</span>
+          <b class="cardest__val" dir="ltr">${esc(money(Math.round(sum(cs, c => cardPending(c)) * 100) / 100))}</b>
+          <span></span>
+        </div>
       </section>` : ''}
 
     <section class="card2 card2--wide">
