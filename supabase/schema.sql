@@ -39,6 +39,22 @@ alter table public.tasks add column if not exists finished_at timestamptz;
 -- היום שממנו המשימה נדחתה — כדי שהיא תמשיך להופיע גם ביום המקורי
 alter table public.tasks add column if not exists moved_from date;
 
+-- קטגוריה: עבודה / שיווק אישי / אישי
+alter table public.tasks add column if not exists category text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'tasks_category_check'
+  ) then
+    alter table public.tasks
+      add constraint tasks_category_check
+      check (category in ('work', 'marketing', 'personal'));
+  end if;
+end
+$$;
+
+create index if not exists tasks_user_category_idx    on public.tasks (user_id, category);
 create index if not exists tasks_user_client_idx     on public.tasks (user_id, client);
 create index if not exists tasks_user_movedfrom_idx  on public.tasks (user_id, moved_from);
 
