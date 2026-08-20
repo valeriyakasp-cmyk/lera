@@ -2065,6 +2065,299 @@ function toast(msg) {
   toastTimer = setTimeout(() => { el.toast.hidden = true; }, 2400);
 }
 
+
+/* ============================================================
+   WEEK PLANNER
+   Seven columns, one per day, plus a drawer holding every open
+   task that is not on the week in view. Dragging a card onto a
+   day moves the task there — the same move the ⋯ menu makes,
+   so a task pushed forward still leaves its trace behind.
+   ============================================================ */
+const weekStartOf = iso => shiftDate(iso, -new Date(iso + 'T12:00:00').getDay());
+let planWeek = weekStartOf(isoDate());
+
+const planDays = () => Array.from({ length: 7 }, (_, i) => shiftDate(planWeek, i));
+
+/** Every open task that is not already sitting on the week in view. */
+function planInbox() {
+  const days = new Set(planDays());
+  return state.tasks
+    .filter(t => !t.done && !days.has(t.task_date))
+    .sort((a, b) => a.task_date.localeCompare(b.task_date) || a.position - b.position);
+}
+
+function shiftPlanWeek(days) {
+  planWeek = shiftDate(planWeek, days);
+  renderPlan();
+  pullPlan().then(renderPlan);
+}
+
+/** The planner needs more than the three days the day view loads. */
+async function pullPlan() {
+  if (!state.sb || !state.user || !navigator.onLine) return;
+  const days = planDays();
+  try {
+    const [weekRes, openRes] = await Promise.all([
+      state.sb.from('tasks').select(COLS).gte('task_date', days[0]).lte('task_date', days[6]),
+      state.sb.from('tasks').select(COLS).eq('done', false).limit(500),
+    ]);
+    if (weekRes.error || openRes.error) return;
+
+    const pending = new Set(state.queue.map(o => o.id));
+    const byId = new Map();
+    for (const r of [...(weekRes.data ?? []), ...(openRes.data ?? [])]) {
+      if (!pending.has(r.id)) byId.set(r.id, r);
+    }
+    const ids = new Set(byId.keys());
+    state.tasks = [
+      ...state.tasks.filter(t => !ids.has(t.id)),
+      ...[...byId.values()].map(normalize),
+    ];
+    persist();
+  } catch (err) {
+    console.error('plan pull failed', err);
+  }
+}
+
+/** Moving from the planner. Time already logged today is never dropped silently. */
+function planMove(task, date) {
+  if (!date || date === task.task_date) return;
+  const from = task.task_date;
+  const finish = () => {
+    renderPlan();
+    toast(`${task.title} → ${relativeLabel(date)}`);
+  };
+  const worked = task.status === 'doing'
+    || (task.subtasks ?? []).some(x => x.done || x.status)
+    || sessionOn(task, from);
+
+  if (worked && !task.done) {
+    openDoneSheet(task, { mode: 'log', on: from, after: () => { moveTask(task, date); finish(); } });
+    return;
+  }
+  moveTask(task, date);
+  finish();
+}
+
+function planCard(task, { showDate = false } = {}) {
+  const card = document.createElement('div');
+  card.className = 'plancard';
+  card.dataset.id = task.id;
+  if (task.category) {
+    card.classList.add('plancard--cat');
+    card.style.setProperty('--hue', CATEGORY[task.category].hue);
+  }
+
+  const title = document.createElement('span');
+  title.className = 'plancard__title';
+  title.textContent = task.title;
+  card.append(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'plancard__meta';
+  if (showDate) {
+    const d = document.createElement('span');
+    d.className = 'plancard__date';
+    d.textContent = relativeLabel(task.task_date);
+    meta.append(d);
+  }
+  if (task.planned_at) {
+    const t = document.createElement('span');
+    t.className = 'plancard__time';
+    t.dir = 'ltr';
+    t.textContent = task.planned_at;
+    meta.append(t);
+  }
+  if (task.client) {
+    const c = document.createElement('span');
+    c.className = 'plancard__client';
+    c.textContent = task.client;
+    meta.append(c);
+  }
+  if (meta.childElementCount) card.append(meta);
+
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'plancard__more';
+  more.setAttribute('aria-label', 'אפשרויות למשימה');
+  more.innerHTML = ICON.more;
+  more.addEventListener('click', e => { e.stopPropagation(); openMenu(task, more); });
+  card.append(more);
+
+  card.addEventListener('pointerdown', e => {
+    if (e.target.closest('.plancard__more')) return;
+    startPlanDrag(e, card, task);
+  });
+  return card;
+}
+
+function planDayNode(date) {
+  const rows  = byDate(date);
+  const open  = rows.filter(t => !t.done);
+  const done  = rows.length - open.length;
+  const today = isoDate();
+
+  const col = document.createElement('section');
+  col.className = 'planday'
+    + (date === today ? ' is-today' : '')
+    + (date < today ? ' is-past' : '');
+
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'planday__head';
+  head.title = `מעבר ל${relativeLabel(date)}`;
+  head.innerHTML =
+    `<span class="planday__name">${HE_DAYS[new Date(date + 'T12:00:00').getDay()]}</span>` +
+    `<span class="planday__date">${new Date(date + 'T12:00:00').getDate()}</span>`;
+  const count = document.createElement('span');
+  count.className = 'planday__count';
+  count.textContent = open.length || '';
+  head.append(count);
+  head.addEventListener('click', () => { goto(date); setMode('day'); });
+  col.append(head);
+
+  const list = document.createElement('div');
+  list.className = 'planday__list';
+  list.dataset.drop = 'day';
+  list.dataset.date = date;
+  list.replaceChildren(...open.map(t => planCard(t)));
+  if (!open.length) {
+    const empty = document.createElement('p');
+    empty.className = 'planday__empty';
+    empty.textContent = 'פנוי';
+    list.append(empty);
+  }
+  col.append(list);
+
+  if (done) {
+    const d = document.createElement('p');
+    d.className = 'planday__done';
+    d.textContent = `${done} הושלמו`;
+    col.append(d);
+  }
+  return col;
+}
+
+function renderPlan() {
+  const page = $('#planPage');
+  if (!page || page.hidden) return;
+
+  const days  = planDays();
+  const label = $('#planLabel');
+  if (label) {
+    const sameMonth = new Date(days[0] + 'T12:00:00').getMonth() === new Date(days[6] + 'T12:00:00').getMonth();
+    label.textContent = sameMonth
+      ? `${new Date(days[0] + 'T12:00:00').getDate()}–${heDate(days[6])}`
+      : `${heDate(days[0])} – ${heDate(days[6])}`;
+  }
+  const thisWeek = weekStartOf(isoDate());
+  const thisBtn = $('#planThis');
+  if (thisBtn) thisBtn.hidden = planWeek === thisWeek;
+
+  const grid = $('#planGrid');
+  grid?.replaceChildren(...days.map(planDayNode));
+
+  /* on a narrow screen the week scrolls — open it on the day that matters */
+  if (grid && grid.scrollWidth > grid.clientWidth + 4) {
+    const today = isoDate();
+    const focus = days.includes(today) ? days.indexOf(today) : 0;
+    grid.children[focus]?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }
+
+  /* ---- drawer of everything still open elsewhere ---- */
+  const inbox = planInbox();
+  const openDrawer = state.ui.planInboxOpen !== false;
+  const list = $('#planInboxList');
+  const toggle = $('#planInboxToggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(openDrawer));
+    const n = $('#planInboxCount');
+    if (n) n.textContent = inbox.length;
+  }
+  if (list) {
+    list.hidden = !openDrawer;
+    list.replaceChildren(...inbox.map(t => planCard(t, { showDate: true })));
+    if (!inbox.length) {
+      const empty = document.createElement('p');
+      empty.className = 'planinbox__empty';
+      empty.textContent = 'הכל מסודר על השבוע הזה';
+      list.append(empty);
+    }
+  }
+}
+
+/* ---- pointer drag: one path for mouse, pen and touch ---- */
+let pdrag = null;
+
+function startPlanDrag(e, node, task) {
+  if (pdrag || (e.button != null && e.button !== 0)) return;
+  const r = node.getBoundingClientRect();
+  pdrag = {
+    task, node, ghost: null, over: null, moved: false,
+    startX: e.clientX, startY: e.clientY,
+    dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width,
+  };
+  window.addEventListener('pointermove', onPlanMove, { passive: false });
+  window.addEventListener('pointerup', endPlanDrag);
+  window.addEventListener('pointercancel', endPlanDrag);
+}
+
+function onPlanMove(e) {
+  if (!pdrag) return;
+
+  if (!pdrag.moved) {
+    if (Math.hypot(e.clientX - pdrag.startX, e.clientY - pdrag.startY) < 6) return;
+    pdrag.moved = true;
+    const g = pdrag.node.cloneNode(true);
+    g.classList.add('plancard--ghost');
+    g.style.width = pdrag.w + 'px';
+    document.body.append(g);
+    pdrag.ghost = g;
+    pdrag.node.classList.add('is-dragging');
+    document.body.classList.add('is-planning');
+  }
+  e.preventDefault();
+
+  pdrag.ghost.style.transform = `translate(${e.clientX - pdrag.dx}px, ${e.clientY - pdrag.dy}px)`;
+
+  pdrag.ghost.style.visibility = 'hidden';
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  pdrag.ghost.style.visibility = '';
+
+  const zone = under?.closest('[data-drop="day"]') ?? null;
+  if (zone !== pdrag.over) {
+    pdrag.over?.classList.remove('is-over');
+    pdrag.over = zone;
+    zone?.classList.add('is-over');
+  }
+
+  // a narrow screen scrolls the week sideways as the card nears an edge
+  const grid = $('#planGrid');
+  if (grid && grid.scrollWidth > grid.clientWidth) {
+    const gr = grid.getBoundingClientRect();
+    const edge = 48;
+    if (e.clientX < gr.left + edge)       grid.scrollLeft -= 14;
+    else if (e.clientX > gr.right - edge) grid.scrollLeft += 14;
+  }
+}
+
+function endPlanDrag() {
+  if (!pdrag) return;
+  window.removeEventListener('pointermove', onPlanMove);
+  window.removeEventListener('pointerup', endPlanDrag);
+  window.removeEventListener('pointercancel', endPlanDrag);
+
+  const { task, node, ghost, over, moved } = pdrag;
+  pdrag = null;
+
+  ghost?.remove();
+  over?.classList.remove('is-over');
+  node.classList.remove('is-dragging');
+  document.body.classList.remove('is-planning');
+
+  if (moved && over) planMove(task, over.dataset.date);
+}
+
 /* ============================================================
    DRAG TO REORDER
    Pointer events, so one code path covers mouse, pen and touch.
@@ -2700,7 +2993,7 @@ const DASH_BAR = '#3D74A8';   // גוון אחד — האורך הוא שנוש�
    כל חלק נפתח לבד, כדי שלא צריך לגלול דרך הכול.
    ============================================================ */
 
-let appMode  = 'day';      // day | money
+let appMode  = 'day';      // day | plan | money
 let moneyTab = 'overview'; // overview | txns | subs | flow | pots
 
 const MONEY_TABS = [
@@ -2721,11 +3014,14 @@ function setMode(m) {
   shell()?.setAttribute('data-mode', m);
   const page = $('#moneyPage');
   if (page) page.hidden = m !== 'money';
-  $('#modeDay')?.classList.toggle('is-on', m === 'day');
-  $('#modeMoney')?.classList.toggle('is-on', m === 'money');
-  $('#modeDay')?.setAttribute('aria-selected', String(m === 'day'));
-  $('#modeMoney')?.setAttribute('aria-selected', String(m === 'money'));
-  if (m === 'money') renderMoney();
+  const plan = $('#planPage');
+  if (plan) plan.hidden = m !== 'plan';
+  for (const [id, key] of [['#modeDay', 'day'], ['#modePlan', 'plan'], ['#modeMoney', 'money']]) {
+    $(id)?.classList.toggle('is-on', m === key);
+    $(id)?.setAttribute('aria-selected', String(m === key));
+  }
+  if (m === 'money')     renderMoney();
+  else if (m === 'plan') { renderPlan(); pullPlan().then(renderPlan); }
   else render();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -4053,6 +4349,15 @@ $$('[data-split-close]').forEach(x => x.addEventListener('click', () => {
 
 $('#bankBtn')?.addEventListener('click', () => { moneyTab = 'overview'; setMode('money'); });
 $('#modeDay')?.addEventListener('click', () => setMode('day'));
+$('#modePlan')?.addEventListener('click', () => { planWeek = weekStartOf(state.date); setMode('plan'); });
+$('#planPrev')?.addEventListener('click', () => shiftPlanWeek(-7));
+$('#planNext')?.addEventListener('click', () => shiftPlanWeek(7));
+$('#planThis')?.addEventListener('click', () => { planWeek = weekStartOf(isoDate()); renderPlan(); pullPlan().then(renderPlan); });
+$('#planInboxToggle')?.addEventListener('click', () => {
+  state.ui.planInboxOpen = !state.ui.planInboxOpen;
+  write(LS.ui, state.ui);
+  renderPlan();
+});
 $('#modeMoney')?.addEventListener('click', () => setMode('money'));
 $('#mRefresh')?.addEventListener('click', async () => {
   const btn = $('#mRefresh');

@@ -108,7 +108,10 @@ a { color: var(--blue-900); }
 .shell {
   max-width: 720px;
   margin-inline: auto;
+  transition: max-width var(--dur) var(--ease);
 }
+/* the week needs seven columns side by side — give it the room */
+.shell[data-mode="plan"] { max-width: min(1080px, 100%); }
 
 /* ============================================================
    HERO
@@ -1816,6 +1819,146 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .shell[data-mode="money"] #addForm,
 .shell[data-mode="money"] #carryover,
 .shell[data-mode="money"] .content > .section { display: none !important; }
+
+.shell[data-mode="plan"] .datenav,
+.shell[data-mode="plan"] .stats,
+.shell[data-mode="plan"] #addForm,
+.shell[data-mode="plan"] #carryover,
+.shell[data-mode="plan"] #catFilter,
+.shell[data-mode="plan"] .content > .section { display: none !important; }
+
+/* ---------- לוח שבועי ---------- */
+.plan { display: grid; gap: var(--s4); }
+
+.plannav {
+  display: flex; align-items: center; justify-content: center; gap: var(--s2);
+}
+.plannav__label {
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  min-width: 150px; text-align: center;
+}
+
+.plangrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(94px, 1fr));
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: var(--s2);
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+}
+
+.planday {
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 8px 6px;
+  min-height: 190px;
+}
+.planday.is-today { border-color: var(--blue-400); background: var(--blue-100); }
+.planday.is-past  { opacity: .72; }
+
+.planday__head {
+  display: flex; align-items: baseline; gap: 5px;
+  border: 0; background: transparent; cursor: pointer;
+  font: inherit; padding: 2px 4px 6px; width: 100%;
+}
+.planday__name  { font-size: 12px; font-weight: 700; color: var(--ink); }
+.planday__date  { font-size: 12px; color: var(--ink-2); }
+.planday__count {
+  margin-inline-start: auto; min-width: 18px; height: 18px;
+  display: grid; place-items: center; padding-inline: 5px;
+  border-radius: 999px; background: var(--card);
+  font-size: 11px; font-weight: 700; color: var(--ink-2);
+}
+.planday__count:empty { display: none; }
+
+.planday__list {
+  display: flex; flex-direction: column; gap: 5px;
+  flex: 1; border-radius: var(--r-xs);
+  padding: 2px; transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.planday__list.is-over {
+  background: hsl(212 72% 94%);
+  box-shadow: inset 0 0 0 2px var(--blue-400);
+}
+.planday__empty {
+  margin: 0; padding: 6px 4px;
+  font-size: 11.5px; color: var(--ink-3); text-align: center;
+}
+.planday__done {
+  margin: 0; padding: 2px 4px;
+  font-size: 11px; color: var(--ink-3);
+}
+
+.plancard {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding-block: 7px;
+  padding-inline: 8px 22px;
+  cursor: grab; touch-action: none;
+  box-shadow: var(--sh-1);
+}
+.plancard--cat {
+  border-inline-start: 3px solid hsl(var(--hue, 212) 58% 62%);
+}
+.plancard__title {
+  display: block; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  line-height: 1.35; overflow-wrap: anywhere;
+}
+.plancard__meta {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+  font-size: 10.5px; font-weight: 600; color: var(--ink-2);
+}
+.plancard__date   { color: var(--ink-3); }
+.plancard__time   { color: #17558F; }
+.plancard__client { color: var(--ink-2); }
+.plancard__more {
+  position: absolute; inset-block-start: 4px; inset-inline-end: 2px;
+  width: 20px; height: 20px; display: grid; place-items: center;
+  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+  border-radius: 6px;
+}
+.plancard__more svg { width: 14px; height: 14px; }
+.plancard__more:hover { background: var(--card); color: var(--ink); }
+.plancard.is-dragging { opacity: .35; }
+.plancard--ghost {
+  position: fixed; inset-block-start: 0; inset-inline-start: 0;
+  z-index: 60; pointer-events: none;
+  box-shadow: var(--sh-3); transform-origin: top left;
+  rotate: -1.5deg;
+}
+body.is-planning { cursor: grabbing; user-select: none; }
+
+.planinbox {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s3);
+}
+.planinbox__toggle {
+  display: flex; align-items: center; gap: var(--s2);
+  width: 100%; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 13.5px; font-weight: 700; color: var(--ink);
+  padding: 0;
+}
+.planinbox__toggle[aria-expanded="false"] .section__chev { transform: rotate(-90deg); }
+.planinbox__list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: var(--s3);
+}
+.planinbox__list .plancard { width: min(220px, 100%); }
+.planinbox__empty {
+  margin: 0; font-size: 12.5px; color: var(--ink-3);
+}
+
+@media (max-width: 620px) {
+  .plangrid { grid-template-columns: repeat(7, 132px); }
+  .planinbox__list .plancard { width: 100%; }
+}
 
 /* ---------- ניהול פיננסי ---------- */
 .money { display: grid; gap: var(--s4); }
