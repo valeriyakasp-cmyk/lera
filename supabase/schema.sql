@@ -163,6 +163,9 @@ create table if not exists public.expenses (
   updated_at      timestamptz not null default now()
 );
 
+-- ההוצאה כבר נגבתה בדף הבנק — סימון עצמאי, לא קיזוז מול תקבול מסוים
+alter table public.expenses add column if not exists settled_bank boolean not null default false;
+
 create index if not exists expenses_user_date_idx on public.expenses (user_id, spend_date);
 
 -- חיוב אחד בלבד לכל מנוי בכל חודש
@@ -213,3 +216,9 @@ drop trigger if exists expenses_touch_updated_at on public.expenses;
 create trigger expenses_touch_updated_at
   before update on public.expenses
   for each row execute function public.touch_updated_at();
+
+-- ------------------------------------------------------------
+-- תנועות שהגיעו מדף הבנק נושאות את המזהה של הבנק, שאינו uuid.
+-- source_id נשאר uuid לקישור פנימי; source_ref מחזיק מזהה חיצוני.
+-- ------------------------------------------------------------
+alter table public.pot_txns add column if not exists source_ref text;
