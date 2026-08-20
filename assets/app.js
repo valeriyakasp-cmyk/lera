@@ -120,7 +120,8 @@ function clientHue(name) {
    ============================================================ */
 /** Fill in fields added after a task was first saved, so older rows behave. */
 const normalize = t => ({
-  client: null, planned_at: null, started_at: null, finished_at: null, moved_from: null,
+  client: null, category: null,
+  planned_at: null, started_at: null, finished_at: null, moved_from: null,
   sessions: [],
   ...t,
   sessions: (t.sessions ?? []).map(x => ({ on: null, from: null, to: null, mins: 0, ...x })),
@@ -242,6 +243,7 @@ function addTask(title) {
     position: nextPosition(state.date),
     subtasks: [],
     client: null,        // free-text client tag
+    category: state.ui.cat ?? null,   // 'work' | 'marketing' | 'personal' | null
     planned_at: null,    // 'HH:MM' — when it is meant to happen
     started_at: null,    // ISO — filled from the completion sheet
     finished_at: null,   // ISO — stamped the moment it is checked off
@@ -1078,6 +1080,12 @@ function setTaskClient(task, client) {
   touch(task);
 }
 
+/** 'work' | 'marketing' | 'personal'. Picking the active one clears it. */
+function setTaskCategory(task, key) {
+  task.category = task.category === key ? null : key;
+  touch(task);
+}
+
 /** 'HH:MM' or null — the hour the task is meant to happen. */
 function setTaskPlanned(task, time) {
   task.planned_at = time || null;
@@ -1235,6 +1243,7 @@ const el = {
   statPct:     $('#statPct'),
   addForm:     $('#addForm'),
   addInput:    $('#addInput'),
+  catFilter:   $('#catFilter'),
   activeList:  $('#activeList'),
   doneList:    $('#doneList'),
   doneSection: $('#doneSection'),
@@ -1278,11 +1287,69 @@ const STATUS = {
   waiting: { label: 'בהמתנה' },
 };
 
+/** Task categories. `null` means the task was never filed under one. */
+const CATEGORY = {
+  work:      { label: 'עבודה',      hue: 212 },
+  marketing: { label: 'שיווק אישי', hue: 291 },
+  personal:  { label: 'אישי',       hue: 152 },
+};
+const CATEGORY_KEYS = ['work', 'marketing', 'personal'];
+
+/** A small coloured chip carrying the category name. */
+function categoryChip(key, { button = false } = {}) {
+  const cat = CATEGORY[key];
+  if (!cat) return null;
+  const node = document.createElement(button ? 'button' : 'span');
+  if (button) node.type = 'button';
+  node.className = 'chip chip--cat';
+  node.style.setProperty('--hue', cat.hue);
+  node.textContent = cat.label;
+  return node;
+}
+
 /** Without a cloud connection the carry-over list comes from the local cache. */
 function localEarlier() {
   return state.tasks
     .filter(t => !t.done && t.task_date < state.date)
     .map(({ id, task_date, title }) => ({ id, task_date, title }));
+}
+
+/** Filter chips above the list. Hidden until the day actually has tasks. */
+function renderCatFilter(rows) {
+  const bar = el.catFilter;
+  if (!bar) return;
+
+  bar.hidden = rows.length === 0;
+  if (bar.hidden) return;
+
+  const counts = {};
+  CATEGORY_KEYS.forEach(k => counts[k] = rows.filter(t => t.category === k).length);
+
+  const make = (key, text, hue) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'catfilter__btn' + (state.ui.cat === key ? ' is-on' : '');
+    if (hue != null) b.style.setProperty('--hue', hue);
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(state.ui.cat === key));
+    b.textContent = text;
+    b.addEventListener('click', () => setCatFilter(key));
+    return b;
+  };
+
+  const nodes = [make(null, `הכל · ${rows.length}`)];
+  CATEGORY_KEYS.forEach(k => {
+    if (!counts[k] && state.ui.cat !== k) return;   // a category with nothing on this day stays out of the way
+    nodes.push(make(k, `${CATEGORY[k].label} · ${counts[k]}`, CATEGORY[k].hue));
+  });
+  bar.replaceChildren(...nodes);
+}
+
+/** null = show everything. Picking the active filter clears it. */
+function setCatFilter(key) {
+  state.ui.cat = state.ui.cat === key ? null : key;
+  write(LS.ui, state.ui);
+  render();
 }
 
 function render() {
@@ -1307,13 +1374,19 @@ function render() {
   el.statTotal.textContent = '/' + rows.length;
   el.statPct.textContent   = pct;
 
-  /* --- lists --- */
-  el.activeList.replaceChildren(...active.map(taskNode));
-  el.doneList.replaceChildren(...done.map(taskNode));
+  /* --- category filter --- */
+  renderCatFilter(rows);
+  const keep      = t => !state.ui.cat || t.category === state.ui.cat;
+  const activeVis = active.filter(keep);
+  const doneVis   = done.filter(keep);
 
-  el.emptyState.hidden   = rows.length > 0;
-  el.doneSection.hidden  = done.length === 0;
-  el.doneCount.textContent = done.length;
+  /* --- lists --- */
+  el.activeList.replaceChildren(...activeVis.map(taskNode));
+  el.doneList.replaceChildren(...doneVis.map(taskNode));
+
+  el.emptyState.hidden   = activeVis.length + doneVis.length > 0;
+  el.doneSection.hidden  = doneVis.length === 0;
+  el.doneCount.textContent = doneVis.length;
   el.doneList.hidden     = !state.ui.doneOpen;
   el.doneToggle.setAttribute('aria-expanded', String(state.ui.doneOpen));
 
@@ -1381,6 +1454,7 @@ function movedNode(task) {
     c.title = 'תת־משימות שהושלמו';
     meta.append(c);
   }
+  if (task.category) meta.append(categoryChip(task.category));
   if (task.client) {
     const c = document.createElement('span');
     c.className = 'chip chip--client';
@@ -1559,6 +1633,13 @@ function taskNode(task) {
       : (task.started_at && task.finished_at ? `${hhmm(task.started_at)}–${hhmm(task.finished_at)}` : 'זמן עבודה');
     if (days.length > 1) d.append(` · ${days.length} ימים`);
     meta.append(d);
+  }
+
+  if (task.category) {
+    const c = categoryChip(task.category, { button: true });
+    c.title = 'שינוי הקטגוריה';
+    c.addEventListener('click', e => { e.stopPropagation(); openMenu(task, c); });
+    meta.append(c);
   }
 
   if (task.client) {
@@ -1812,6 +1893,20 @@ function openMenu(task, anchor) {
 
   item('', `<span class="menu__icon">${ICON.tag}</span><span>${task.client ? `לקוח · ${task.client}` : 'שיוך ללקוח…'}</span>`,
     () => openClientSheet(task), { role: 'menuitem' });
+
+  sep();
+  label('קטגוריה');
+  for (const key of CATEGORY_KEYS) {
+    const on = task.category === key;
+    item(
+      'menu__item--cat',
+      `<span class="cat__dot" style="--hue:${CATEGORY[key].hue}" aria-hidden="true"></span>` +
+      `<span>${CATEGORY[key].label}</span>` +
+      (on ? `<span class="menu__check">${ICON.check}</span>` : ''),
+      () => { setTaskCategory(task, key); render(); },
+      { role: 'menuitemradio', 'aria-checked': String(on) },
+    );
+  }
 
   if (!task.done) {
     /* planned hour — a real, visible time field so it works on every platform */
@@ -4850,7 +4945,7 @@ $('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMon
    CLOUD  (Supabase)
    ============================================================ */
 const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
-             'client,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
+             'client,category,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -4864,6 +4959,7 @@ const toRow = t => ({
   position: t.position,
   subtasks: t.subtasks,
   client: t.client ?? null,
+  category: t.category ?? null,
   planned_at: t.planned_at ?? null,
   started_at: t.started_at ?? null,
   finished_at: t.finished_at ?? null,

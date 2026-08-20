@@ -771,6 +771,42 @@ a { color: var(--blue-900); }
 }
 .chip--client:hover { background: hsl(var(--hue, 210) 72% 89%); }
 .chip--pick { height: 28px; font-size: 12.5px; cursor: pointer; }
+
+/* קטגוריה — עבודה / שיווק אישי / אישי */
+.chip--cat {
+  background: hsl(var(--hue, 212) 68% 94%);
+  color:      hsl(var(--hue, 212) 58% 30%);
+  border: 0; cursor: pointer;
+  font-family: inherit;
+}
+.chip--cat:hover { background: hsl(var(--hue, 212) 68% 89%); }
+
+/* פס הסינון מעל רשימת המשימות */
+.catfilter {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 var(--s4);
+}
+.catfilter__btn {
+  height: 30px; padding-inline: 13px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: var(--card); color: var(--ink-2);
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.catfilter__btn:hover { background: hsl(var(--hue, 220) 30% 92%); }
+.catfilter__btn.is-on {
+  background: hsl(var(--hue, 220) 62% 93%);
+  color:      hsl(var(--hue, 220) 55% 27%);
+  border-color: hsl(var(--hue, 220) 55% 78%);
+}
+
+/* נקודת צבע בבורר הקטגוריה שבתפריט */
+.menu__item--cat .cat__dot {
+  width: 9px; height: 9px; flex: none;
+  border-radius: 999px;
+  background: hsl(var(--hue, 212) 62% 62%);
+}
 /* מנוי שמישהו אחר משלם — ניטרלי בכוונה, זה לא סטטוס */
 .chip--payer { background: #EFEDE9; color: #5B5347; }
 
