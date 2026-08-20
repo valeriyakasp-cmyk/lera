@@ -34,6 +34,10 @@ const uid = () =>
      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
    }));
 
+/** Rows imported from the bank carry the bank's own id, which is not a uuid. */
+const isUuid = v => typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const read  = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
@@ -142,7 +146,7 @@ const normalizeExp = e => ({
 });
 const normalizeInc = i => ({ ...i, amount: Number(i.amount) || 0 });
 const normalizePot = p => ({ ...p, share: Number(p.share) || 0, position: Number(p.position) || 0 });
-const normalizeTxn = t => ({ ...t, amount: Number(t.amount) || 0 });
+const normalizeTxn = t => ({ ...t, amount: Number(t.amount) || 0, source_id: t.source_id ?? t.source_ref ?? null });
 const normalizeGoal = g => ({ ...g, target: Number(g.target) || 0, position: Number(g.position) || 0 });
 
 const state = {
@@ -4985,7 +4989,7 @@ const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note
 const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,pot_id,settled_by,settled_bank,created_at,updated_at';
 const INC_COLS = 'id,received_on,client,title,amount,note,created_at,updated_at';
 const POT_COLS  = 'id,name,share,colour,position,created_at,updated_at';
-const TXN_COLS  = 'id,pot_id,happened_on,amount,kind,title,source_id,note,created_at,updated_at';
+const TXN_COLS  = 'id,pot_id,happened_on,amount,kind,title,source_id,source_ref,note,created_at,updated_at';
 const GOAL_COLS = 'id,pot_id,title,target,done,position,created_at,updated_at';
 
 const subToRow = s => ({
@@ -5045,7 +5049,10 @@ const potToRow = p => ({
 const txnToRow = t => ({
   id: t.id, user_id: state.user.id,
   pot_id: t.pot_id, happened_on: t.happened_on, amount: t.amount,
-  kind: t.kind, title: t.title ?? null, source_id: t.source_id ?? null, note: t.note ?? null,
+  kind: t.kind, title: t.title ?? null,
+  source_id:  isUuid(t.source_id) ? t.source_id : null,
+  source_ref: isUuid(t.source_id) ? null : (t.source_id ?? null),
+  note: t.note ?? null,
   created_at: t.created_at, updated_at: t.updated_at,
 });
 
