@@ -130,7 +130,16 @@ const normalize = t => ({
 
 /** Postgres `numeric` can arrive as a string — coerce so maths stays maths. */
 const normalizeSub = s => ({ ...s, amount: Number(s.amount) || 0, billing_day: Number(s.billing_day) || 1 });
-const normalizeExp = e => ({ ...e, amount: Number(e.amount) || 0, pot_id: e.pot_id ?? null, settled_by: e.settled_by ?? null });
+/* settled_by is a real income id (uuid). Older builds also stashed the string
+   'bank' there to mean "the bank statement already collected it" — which the
+   database rejects. That meaning now lives in its own boolean. */
+const normalizeExp = e => ({
+  ...e,
+  amount: Number(e.amount) || 0,
+  pot_id: e.pot_id ?? null,
+  settled_by: (e.settled_by && e.settled_by !== 'bank') ? e.settled_by : null,
+  settled_bank: e.settled_bank ?? (e.settled_by === 'bank'),
+});
 const normalizeInc = i => ({ ...i, amount: Number(i.amount) || 0 });
 const normalizePot = p => ({ ...p, share: Number(p.share) || 0, position: Number(p.position) || 0 });
 const normalizeTxn = t => ({ ...t, amount: Number(t.amount) || 0 });
@@ -331,6 +340,7 @@ function addExpense({ title, amount, spend_date, client, kind, subscription_id, 
     payer: (payer ?? '').trim() || null,
     pot_id: pot_id ?? null,
     settled_by: null,
+    settled_bank: false,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -492,7 +502,7 @@ function clearTxnsOf(sourceId) {
 const paidFromPot = e => state.txns.some(t => t.source_id === e.id && t.kind === 'expense');
 
 /** הוצאה שעדיין לא ירדה משום מקום — היא מחכה לקיזוז מההכנסה הבאה. */
-const isUnsettled = e => isMine(e) && e.amount > 0 && !e.settled_by && !paidFromPot(e);
+const isUnsettled = e => isMine(e) && e.amount > 0 && !e.settled_by && !e.settled_bank && !paidFromPot(e);
 
 /** הוצאות החודש שעדיין לא קוזזו, מהישנה לחדשה. */
 const unsettledIn = ym => state.expenses
@@ -502,7 +512,7 @@ const unsettledIn = ym => state.expenses
 /** ההוצאה יורדת עכשיו מקופה — תנועה שלילית אמיתית ביומן. */
 function payFromPot(exp, potId) {
   clearTxnsOf(exp.id);
-  if (exp.settled_by) { exp.settled_by = null; touchRow('expenses', exp); }
+  if (exp.settled_by || exp.settled_bank) { exp.settled_by = null; exp.settled_bank = false; touchRow('expenses', exp); }
   exp.pot_id = potId;
   touchRow('expenses', exp);
   addTxn({
@@ -514,8 +524,9 @@ function payFromPot(exp, potId) {
 /** משחרר הוצאה מקיזוז, בין אם ירדה מקופה ובין אם קוזזה מהכנסה. */
 function unsettleExpense(exp) {
   clearTxnsOf(exp.id);
-  if (exp.settled_by || exp.pot_id) {
+  if (exp.settled_by || exp.settled_bank || exp.pot_id) {
     exp.settled_by = null;
+    exp.settled_bank = false;
     exp.pot_id = null;
     touchRow('expenses', exp);
   }
@@ -539,6 +550,7 @@ function applyIncomeSplit(inc, { settledIds = [], parts = null } = {}) {
     if (e.settled_by === inc.id) return;
     clearTxnsOf(e.id);          // אם היא ירדה קודם מקופה — מבטלים, כדי לא לספור פעמיים
     e.settled_by = inc.id;
+    e.settled_bank = false;
     e.pot_id = null;
     touchRow('expenses', e);
   });
@@ -956,8 +968,8 @@ function applyBankPlan(plan) {
 
   /* ההוצאות הידניות הופכות לרשימת מעקב — הבנק כבר גובה אותן */
   state.expenses.forEach(e => {
-    if ((e.spend_date ?? '') > plan.anchor && !e.settled_by) {
-      e.settled_by = 'bank';
+    if ((e.spend_date ?? '') > plan.anchor && !e.settled_by && !e.settled_bank) {
+      e.settled_bank = true;
       touchRow('expenses', e);
     }
   });
@@ -4970,7 +4982,7 @@ const toRow = t => ({
 });
 
 const SUB_COLS = 'id,name,amount,billing_day,active,started_on,cancelled_on,note,payer,position,created_at,updated_at';
-const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,pot_id,settled_by,created_at,updated_at';
+const EXP_COLS = 'id,spend_date,title,amount,kind,subscription_id,period,client,note,payer,pot_id,settled_by,settled_bank,created_at,updated_at';
 const INC_COLS = 'id,received_on,client,title,amount,note,created_at,updated_at';
 const POT_COLS  = 'id,name,share,colour,position,created_at,updated_at';
 const TXN_COLS  = 'id,pot_id,happened_on,amount,kind,title,source_id,note,created_at,updated_at';
@@ -5005,7 +5017,8 @@ const expToRow = e => ({
   note: e.note ?? null,
   payer: e.payer ?? null,
   pot_id: e.pot_id ?? null,
-  settled_by: e.settled_by ?? null,
+  settled_by: (e.settled_by && e.settled_by !== 'bank') ? e.settled_by : null,
+  settled_bank: !!e.settled_bank,
   created_at: e.created_at,
   updated_at: e.updated_at,
 });
