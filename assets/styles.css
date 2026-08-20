@@ -1827,6 +1827,11 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .shell[data-mode="plan"] #catFilter,
 .shell[data-mode="plan"] .content > .section { display: none !important; }
 
+/* ביטול ושחזור — עמומים כשאין מה לבטל, ולא נעלמים, כדי שהמקום יישאר יציב */
+#undoBtn[disabled], #redoBtn[disabled] {
+  opacity: .3; cursor: default; pointer-events: none;
+}
+
 /* ---------- לוח שבועי ---------- */
 .plan { display: grid; gap: var(--s4); }
 

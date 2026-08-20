@@ -187,6 +187,7 @@ const persist = () => {
   write(LS.charged, state.charged);
   write(LS.budgets, state.budgets);
   write(LS.cardest, state.cardest);
+  scheduleHistory();
 };
 
 /* ---------- money ---------- */
@@ -2067,6 +2068,169 @@ function toast(msg) {
 
 
 /* ============================================================
+   UNDO / REDO
+   Every write funnels through persist(), so history watches from
+   there: once the current action settles, the changed rows are
+   diffed against the last known state and stored as one step.
+   Undo replays the old rows — and queues them for the cloud, so
+   the correction travels with everything else.
+   ============================================================ */
+const HIST_KEYS = [
+  ['tasks',    'tasks'],
+  ['subs',     'subscriptions'],
+  ['expenses', 'expenses'],
+  ['income',   'income'],
+  ['pots',     'pots'],
+  ['txns',     'pot_txns'],
+  ['goals',    'goals'],
+];
+const HIST_MAX = 40;
+
+let histBase = null;
+let histUndo = [];
+let histRedo = [];
+let histPaused = 0;
+let histTimer = null;
+
+/** id → serialised row, per tracked list. */
+function histSnapshot() {
+  const snap = {};
+  for (const [key] of HIST_KEYS) {
+    const map = new Map();
+    for (const row of state[key] ?? []) map.set(row.id, JSON.stringify(row));
+    snap[key] = map;
+  }
+  return snap;
+}
+
+/** Forget the pending comparison — used around anything the cloud writes. */
+function rebaseHistory() {
+  histBase = histSnapshot();
+}
+
+function scheduleHistory() {
+  if (histTimer) return;
+  histTimer = setTimeout(() => { histTimer = null; commitHistory(); }, 0);
+}
+
+function commitHistory() {
+  if (!histBase || histPaused) { rebaseHistory(); return; }
+
+  const now = histSnapshot();
+  const step = {};
+  let touched = false;
+
+  for (const [key] of HIST_KEYS) {
+    const before = histBase[key];
+    const after  = now[key];
+    const undoRows = [], redoRows = [], undoDel = [], redoDel = [];
+
+    for (const [id, json] of after) {
+      const old = before.get(id);
+      if (old === json) continue;
+      redoRows.push(JSON.parse(json));
+      if (old === undefined) undoDel.push(id);
+      else                   undoRows.push(JSON.parse(old));
+    }
+    for (const [id, json] of before) {
+      if (after.has(id)) continue;
+      undoRows.push(JSON.parse(json));
+      redoDel.push(id);
+    }
+    if (undoRows.length || redoRows.length || undoDel.length || redoDel.length) {
+      step[key] = { undoRows, redoRows, undoDel, redoDel };
+      touched = true;
+    }
+  }
+
+  if (touched) {
+    histUndo.push(step);
+    if (histUndo.length > HIST_MAX) histUndo.shift();
+    histRedo = [];
+    paintHistory();
+  }
+  histBase = now;
+}
+
+/** Record the change that is still sitting in the timer, if any. */
+function settleHistory() {
+  if (!histTimer) return;
+  clearTimeout(histTimer);
+  histTimer = null;
+  commitHistory();
+}
+
+function applyHistStep(step, dir) {
+  histPaused++;
+  for (const [key, table] of HIST_KEYS) {
+    const s = step[key];
+    if (!s) continue;
+    const rows = dir === 'undo' ? s.undoRows : s.redoRows;
+    const dels = dir === 'undo' ? s.undoDel  : s.redoDel;
+    const list = state[key];
+
+    for (const id of dels) {
+      const i = list.findIndex(r => r.id === id);
+      if (i >= 0) list.splice(i, 1);
+      queueOp({ type: 'delete', table, id });
+    }
+    for (const row of rows) {
+      const copy = JSON.parse(JSON.stringify(row));
+      const i = list.findIndex(r => r.id === copy.id);
+      if (i >= 0) list[i] = copy; else list.push(copy);
+      queueOp({ type: 'upsert', table, id: copy.id });
+    }
+  }
+  persist();
+  histPaused--;
+
+  if (histTimer) { clearTimeout(histTimer); histTimer = null; }
+  rebaseHistory();
+  paintHistory();
+  redrawAll();
+}
+
+const redrawAll = () =>
+  appMode === 'money' ? renderMoney() :
+  appMode === 'plan'  ? renderPlan()  : render();
+
+function undoLast() {
+  settleHistory();
+  const step = histUndo.pop();
+  if (!step) return toast('אין מה לבטל');
+  histRedo.push(step);
+  applyHistStep(step, 'undo');
+  toast('הפעולה בוטלה');
+}
+
+function redoLast() {
+  settleHistory();
+  const step = histRedo.pop();
+  if (!step) return toast('אין מה לשחזר');
+  histUndo.push(step);
+  applyHistStep(step, 'redo');
+  toast('הפעולה שוחזרה');
+}
+
+function paintHistory() {
+  const u = $('#undoBtn'), r = $('#redoBtn');
+  if (u) u.disabled = histUndo.length === 0;
+  if (r) r.disabled = histRedo.length === 0;
+}
+
+/** ⌘Z / ⌘⇧Z — but never while the caret is inside a field. */
+function isTyping(t) {
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+}
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod || isTyping(e.target)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z') { e.preventDefault(); e.shiftKey ? redoLast() : undoLast(); }
+  else if (k === 'y') { e.preventDefault(); redoLast(); }
+});
+
+/* ============================================================
    WEEK PLANNER
    Seven columns, one per day, plus a drawer holding every open
    task that is not on the week in view. Dragging a card onto a
@@ -2096,6 +2260,7 @@ function shiftPlanWeek(days) {
 async function pullPlan() {
   if (!state.sb || !state.user || !navigator.onLine) return;
   const days = planDays();
+  histPaused++;
   try {
     const [weekRes, openRes] = await Promise.all([
       state.sb.from('tasks').select(COLS).gte('task_date', days[0]).lte('task_date', days[6]),
@@ -2116,6 +2281,9 @@ async function pullPlan() {
     persist();
   } catch (err) {
     console.error('plan pull failed', err);
+  } finally {
+    histPaused--;
+    rebaseHistory();
   }
 }
 
@@ -5450,6 +5618,7 @@ async function flush() {
 async function pull() {
   if (!state.sb || !state.user) return;
   setStatus('syncing');
+  histPaused++;
   try {
     const dates = [state.date, shiftDate(state.date, -1), shiftDate(state.date, 1)];
 
@@ -5529,6 +5698,9 @@ async function pull() {
   } catch (err) {
     console.error('pull failed', err);
     setStatus('error');
+  } finally {
+    histPaused--;
+    rebaseHistory();
   }
 }
 
@@ -5786,4 +5958,9 @@ setInterval(() => {
   }
   ensureCharges();
   if (appMode === 'money') renderMoney(); else render();
+  rebaseHistory();
+  paintHistory();
 })();
+
+$('#undoBtn')?.addEventListener('click', undoLast);
+$('#redoBtn')?.addEventListener('click', redoLast);
