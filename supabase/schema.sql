@@ -225,3 +225,8 @@ alter table public.pot_txns add column if not exists source_ref text;
 
 -- משימה שממתינה בלוח השבועי לשיבוץ — שומרת תאריך, אבל לא יושבת על היום
 alter table public.tasks add column if not exists unplanned boolean not null default false;
+
+-- דחיפות: 1 רגילה, 2 חשובה, 3 דחופה. null = לא דורגה
+alter table public.tasks add column if not exists urgency smallint;
+alter table public.tasks drop constraint if exists tasks_urgency_check;
+alter table public.tasks add constraint tasks_urgency_check check (urgency between 1 and 3);
