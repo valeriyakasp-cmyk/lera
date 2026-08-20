@@ -1951,10 +1951,27 @@ body.is-planning { cursor: grabbing; user-select: none; }
   padding: 0;
 }
 .planinbox__toggle[aria-expanded="false"] .section__chev { transform: rotate(-90deg); }
+.planinbox__scope {
+  display: flex; gap: 6px; margin-top: var(--s3);
+}
+.planinbox__scope button {
+  height: 26px; padding-inline: 11px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: var(--card); color: var(--ink-2);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.planinbox__scope button.is-on {
+  background: hsl(212 62% 93%); color: hsl(212 55% 27%);
+  border-color: hsl(212 55% 78%);
+}
 .planinbox__list {
   display: flex; flex-wrap: wrap; gap: 6px;
   margin-top: var(--s3);
+  max-height: 46vh; overflow-y: auto;
+  scrollbar-width: thin;
 }
+/* כבר יושבת על אחד הימים שרואים — סימון עדין, לא הפרעה */
+.plancard__date--placed { color: hsl(212 55% 45%); }
 .planinbox__list .plancard { width: min(220px, 100%); }
 .planinbox__empty {
   margin: 0; font-size: 12.5px; color: var(--ink-3);

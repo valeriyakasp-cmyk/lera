@@ -2242,11 +2242,16 @@ let planWeek = weekStartOf(isoDate());
 
 const planDays = () => Array.from({ length: 7 }, (_, i) => shiftDate(planWeek, i));
 
-/** Every open task that is not already sitting on the week in view. */
+/**
+ * The drawer holds every open task by default, so the whole pile is in one
+ * place to sort through. Narrowing it to "outside this week" leaves only what
+ * still has no home on the week in view.
+ */
 function planInbox() {
   const days = new Set(planDays());
+  const all  = state.ui.planInboxAll !== false;
   return state.tasks
-    .filter(t => !t.done && !days.has(t.task_date))
+    .filter(t => !t.done && (all || !days.has(t.task_date)))
     .sort((a, b) => a.task_date.localeCompare(b.task_date) || a.position - b.position);
 }
 
@@ -2326,6 +2331,7 @@ function planCard(task, { showDate = false } = {}) {
   if (showDate) {
     const d = document.createElement('span');
     d.className = 'plancard__date';
+    if (planDays().includes(task.task_date)) d.classList.add('plancard__date--placed');
     d.textContent = relativeLabel(task.task_date);
     meta.append(d);
   }
@@ -2435,20 +2441,33 @@ function renderPlan() {
   /* ---- drawer of everything still open elsewhere ---- */
   const inbox = planInbox();
   const openDrawer = state.ui.planInboxOpen !== false;
-  const list = $('#planInboxList');
+  const all = state.ui.planInboxAll !== false;
+
   const toggle = $('#planInboxToggle');
   if (toggle) {
     toggle.setAttribute('aria-expanded', String(openDrawer));
     const n = $('#planInboxCount');
     if (n) n.textContent = inbox.length;
   }
+
+  const scope = $('#planInboxScope');
+  if (scope) {
+    scope.hidden = !openDrawer;
+    $$('button', scope).forEach(b => {
+      const on = (b.dataset.scope === 'all') === all;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+  }
+
+  const list = $('#planInboxList');
   if (list) {
     list.hidden = !openDrawer;
     list.replaceChildren(...inbox.map(t => planCard(t, { showDate: true })));
     if (!inbox.length) {
       const empty = document.createElement('p');
       empty.className = 'planinbox__empty';
-      empty.textContent = 'הכל מסודר על השבוע הזה';
+      empty.textContent = all ? 'אין משימות פתוחות' : 'הכל מסודר על השבוע הזה';
       list.append(empty);
     }
   }
@@ -4523,6 +4542,13 @@ $('#planNext')?.addEventListener('click', () => shiftPlanWeek(7));
 $('#planThis')?.addEventListener('click', () => { planWeek = weekStartOf(isoDate()); renderPlan(); pullPlan().then(renderPlan); });
 $('#planInboxToggle')?.addEventListener('click', () => {
   state.ui.planInboxOpen = !state.ui.planInboxOpen;
+  write(LS.ui, state.ui);
+  renderPlan();
+});
+$('#planInboxScope')?.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  state.ui.planInboxAll = b.dataset.scope === 'all';
   write(LS.ui, state.ui);
   renderPlan();
 });
