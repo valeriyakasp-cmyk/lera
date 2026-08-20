@@ -124,7 +124,7 @@ function clientHue(name) {
    ============================================================ */
 /** Fill in fields added after a task was first saved, so older rows behave. */
 const normalize = t => ({
-  client: null, category: null,
+  client: null, category: null, unplanned: false,
   planned_at: null, started_at: null, finished_at: null, moved_from: null,
   sessions: [],
   ...t,
@@ -216,8 +216,9 @@ function shiftMonth(ym, n) {
 
 const sum = (rows, pick) => rows.reduce((n, r) => n + Number(pick(r) || 0), 0);
 
+/** Tasks placed on a day. Anything parked in the planner drawer stays out. */
 const byDate = d => state.tasks
-  .filter(t => t.task_date === d)
+  .filter(t => t.task_date === d && !t.unplanned)
   .sort((a, b) => a.position - b.position);
 
 const nextPosition = d => {
@@ -258,6 +259,7 @@ function addTask(title) {
     subtasks: [],
     client: null,        // free-text client tag
     category: state.ui.cat ?? null,   // 'work' | 'marketing' | 'personal' | null
+    unplanned: false,    // waiting in the planner drawer, not sitting on a day
     planned_at: null,    // 'HH:MM' — when it is meant to happen
     started_at: null,    // ISO — filled from the completion sheet
     finished_at: null,   // ISO — stamped the moment it is checked off
@@ -1097,6 +1099,13 @@ function setTaskClient(task, client) {
   touch(task);
 }
 
+/** Park a task in the planner drawer — it keeps its date but leaves the day. */
+function unplanTask(task) {
+  if (task.unplanned) return;
+  task.unplanned = true;
+  touch(task);
+}
+
 /** 'work' | 'marketing' | 'personal'. Picking the active one clears it. */
 function setTaskCategory(task, key) {
   task.category = task.category === key ? null : key;
@@ -1178,7 +1187,9 @@ function applyOrder(ids) {
  */
 function moveTask(task, date) {
   const from = task.task_date;
-  task.moved_from = date > from ? (task.moved_from ?? from) : null;
+  // a task coming back from the drawer is being placed, not pushed forward
+  task.moved_from = (!task.unplanned && date > from) ? (task.moved_from ?? from) : null;
+  task.unplanned = false;
   task.task_date = date;
   task.position = Date.now();
   touch(task);
@@ -1327,7 +1338,7 @@ function categoryChip(key, { button = false } = {}) {
 /** Without a cloud connection the carry-over list comes from the local cache. */
 function localEarlier() {
   return state.tasks
-    .filter(t => !t.done && t.task_date < state.date)
+    .filter(t => !t.done && !t.unplanned && t.task_date < state.date)
     .map(({ id, task_date, title }) => ({ id, task_date, title }));
 }
 
@@ -1430,7 +1441,7 @@ function render() {
 
 /** Open tasks that were planned for `date` but pushed to a later day. */
 const pushedFrom = date => state.tasks
-  .filter(t => t.moved_from === date && t.task_date > date && !t.done)
+  .filter(t => t.moved_from === date && t.task_date > date && !t.done && !t.unplanned)
   .sort((a, b) => (a.task_date ?? '').localeCompare(b.task_date ?? ''));
 
 /** A read-only echo of a task that left this day, with a way to pull it back. */
@@ -1911,6 +1922,14 @@ function openMenu(task, anchor) {
   item('', `<span class="menu__icon">${ICON.tag}</span><span>${task.client ? `לקוח · ${task.client}` : 'שיוך ללקוח…'}</span>`,
     () => openClientSheet(task), { role: 'menuitem' });
 
+  if (!task.done && !task.unplanned) {
+    item('', `<span class="menu__icon">${ICON.next}</span><span>החזרה לרשימת הסידור</span>`, () => {
+      unplanTask(task);
+      redrawAll();
+      toast('המשימה חזרה לרשימת הסידור');
+    }, { role: 'menuitem' });
+  }
+
   sep();
   label('קטגוריה');
   for (const key of CATEGORY_KEYS) {
@@ -2251,8 +2270,11 @@ function planInbox() {
   const days = new Set(planDays());
   const all  = state.ui.planInboxAll !== false;
   return state.tasks
-    .filter(t => !t.done && (all || !days.has(t.task_date)))
-    .sort((a, b) => a.task_date.localeCompare(b.task_date) || a.position - b.position);
+    .filter(t => !t.done && (t.unplanned || all || !days.has(t.task_date)))
+    .sort((a, b) =>
+      Number(!!b.unplanned) - Number(!!a.unplanned)   // waiting to be placed comes first
+      || a.task_date.localeCompare(b.task_date)
+      || a.position - b.position);
 }
 
 function shiftPlanWeek(days) {
@@ -2331,8 +2353,13 @@ function planCard(task, { showDate = false } = {}) {
   if (showDate) {
     const d = document.createElement('span');
     d.className = 'plancard__date';
-    if (planDays().includes(task.task_date)) d.classList.add('plancard__date--placed');
-    d.textContent = relativeLabel(task.task_date);
+    if (task.unplanned) {
+      d.classList.add('plancard__date--waiting');
+      d.textContent = 'ממתינה לשיבוץ';
+    } else {
+      if (planDays().includes(task.task_date)) d.classList.add('plancard__date--placed');
+      d.textContent = relativeLabel(task.task_date);
+    }
     meta.append(d);
   }
   if (task.planned_at) {
@@ -2389,6 +2416,21 @@ function planDayNode(date) {
   head.append(count);
   head.addEventListener('click', () => { goto(date); setMode('day'); });
   col.append(head);
+
+  if (open.length) {
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'planday__clear';
+    clear.textContent = 'לרוקן';
+    clear.title = `החזרת ${open.length} המשימות של ${relativeLabel(date)} לרשימת הסידור`;
+    clear.addEventListener('click', e => {
+      e.stopPropagation();
+      open.forEach(unplanTask);
+      renderPlan();
+      toast(`${open.length} משימות חזרו לרשימת הסידור`);
+    });
+    col.append(clear);
+  }
 
   const list = document.createElement('div');
   list.className = 'planday__list';
@@ -5460,7 +5502,7 @@ $('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMon
    CLOUD  (Supabase)
    ============================================================ */
 const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
-             'client,category,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
+             'client,category,unplanned,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -5475,6 +5517,7 @@ const toRow = t => ({
   subtasks: t.subtasks,
   client: t.client ?? null,
   category: t.category ?? null,
+  unplanned: !!t.unplanned,
   planned_at: t.planned_at ?? null,
   started_at: t.started_at ?? null,
   finished_at: t.finished_at ?? null,
