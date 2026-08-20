@@ -222,3 +222,6 @@ create trigger expenses_touch_updated_at
 -- source_id נשאר uuid לקישור פנימי; source_ref מחזיק מזהה חיצוני.
 -- ------------------------------------------------------------
 alter table public.pot_txns add column if not exists source_ref text;
+
+-- משימה שממתינה בלוח השבועי לשיבוץ — שומרת תאריך, אבל לא יושבת על היום
+alter table public.tasks add column if not exists unplanned boolean not null default false;
