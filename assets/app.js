@@ -246,7 +246,7 @@ function queueOp(op) {
   flush();
 }
 
-function addTask(title) {
+function addTask(title, { unplanned = false } = {}) {
   const task = {
     id: uid(),
     task_date: state.date,
@@ -258,8 +258,8 @@ function addTask(title) {
     position: nextPosition(state.date),
     subtasks: [],
     client: null,        // free-text client tag
-    category: state.ui.cat ?? null,   // 'work' | 'marketing' | 'personal' | null
-    unplanned: false,    // waiting in the planner drawer, not sitting on a day
+    category: unplanned ? null : (state.ui.cat ?? null),   // 'work' | 'marketing' | 'personal' | null
+    unplanned,           // waiting in the planner drawer, not sitting on a day
     urgency: null,       // null | 1 רגילה | 2 חשובה | 3 דחופה
     planned_at: null,    // 'HH:MM' — when it is meant to happen
     started_at: null,    // ISO — filled from the completion sheet
@@ -2385,6 +2385,8 @@ function planMove(task, date) {
   finish();
 }
 
+let planFlashId = null;
+
 function planCard(task, { showDate = false } = {}) {
   const card = document.createElement('div');
   card.className = 'plancard';
@@ -2442,6 +2444,12 @@ function planCard(task, { showDate = false } = {}) {
     if (e.target.closest('.plancard__more')) return;
     startPlanDrag(e, card, task);
   });
+
+  if (task.id === planFlashId) {
+    card.classList.add('is-new');
+    requestAnimationFrame(() => card.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    planFlashId = null;
+  }
   return card;
 }
 
@@ -4639,6 +4647,20 @@ $('#planInboxToggle')?.addEventListener('click', () => {
   state.ui.planInboxOpen = !state.ui.planInboxOpen;
   write(LS.ui, state.ui);
   renderPlan();
+});
+$('#planAddForm')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const input = $('#planAddInput');
+  const v = input.value.trim();
+  if (!v) return;
+  const task = addTask(v, { unplanned: true });
+  planFlashId = task.id;
+  input.value = '';
+  state.ui.planInboxOpen = true;
+  write(LS.ui, state.ui);
+  renderPlan();
+  input.focus();
+  toast('נוספה לרשימת הסידור');
 });
 $('#planInboxScope')?.addEventListener('click', e => {
   const b = e.target.closest('button');

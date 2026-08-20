@@ -1963,6 +1963,14 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 }
 body.is-planning { cursor: grabbing; user-select: none; }
 
+/* הכרטיס שהרגע נוסף — הבזק קצר כדי שהעין תמצא אותו */
+@keyframes plancard-in {
+  from { background: hsl(212 72% 93%); border-color: var(--blue-400); }
+  to   { background: var(--surface);   border-color: var(--line); }
+}
+.plancard.is-new { animation: plancard-in 1.4s var(--ease); }
+@media (prefers-reduced-motion: reduce) { .plancard.is-new { animation: none; } }
+
 .planinbox {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1976,6 +1984,15 @@ body.is-planning { cursor: grabbing; user-select: none; }
   padding: 0;
 }
 .planinbox__toggle[aria-expanded="false"] .section__chev { transform: rotate(-90deg); }
+/* שדה הוספה משלה למגירה — משימה נכנסת ישר לרשימת הסידור */
+.composer--inbox {
+  margin-top: var(--s3); margin-bottom: 0;
+  box-shadow: none; border: 1px solid var(--line);
+}
+.composer--inbox:focus-within { box-shadow: var(--sh-2); border-color: var(--blue-400); }
+.composer--inbox input { height: 32px; font-size: 14px; }
+.composer--inbox .composer__submit { height: 34px; font-size: 13px; }
+
 .planinbox__scope {
   display: flex; gap: 6px; margin-top: var(--s3);
 }
