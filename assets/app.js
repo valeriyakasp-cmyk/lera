@@ -124,7 +124,7 @@ function clientHue(name) {
    ============================================================ */
 /** Fill in fields added after a task was first saved, so older rows behave. */
 const normalize = t => ({
-  client: null, category: null, unplanned: false,
+  client: null, category: null, unplanned: false, urgency: null,
   planned_at: null, started_at: null, finished_at: null, moved_from: null,
   sessions: [],
   ...t,
@@ -260,6 +260,7 @@ function addTask(title) {
     client: null,        // free-text client tag
     category: state.ui.cat ?? null,   // 'work' | 'marketing' | 'personal' | null
     unplanned: false,    // waiting in the planner drawer, not sitting on a day
+    urgency: null,       // null | 1 רגילה | 2 חשובה | 3 דחופה
     planned_at: null,    // 'HH:MM' — when it is meant to happen
     started_at: null,    // ISO — filled from the completion sheet
     finished_at: null,   // ISO — stamped the moment it is checked off
@@ -1099,6 +1100,12 @@ function setTaskClient(task, client) {
   touch(task);
 }
 
+/** 1–3, or null for "not rated". Picking the level again clears it. */
+function setTaskUrgency(task, level) {
+  task.urgency = task.urgency === level ? null : level;
+  touch(task);
+}
+
 /** Park a task in the planner drawer — it keeps its date but leaves the day. */
 function unplanTask(task) {
   if (task.unplanned) return;
@@ -1314,6 +1321,30 @@ const STATUS = {
   doing:   { label: 'בעבודה' },
   waiting: { label: 'בהמתנה' },
 };
+
+/**
+ * How much a task is pressing. Three filled bars read at a glance and do not
+ * lean on colour alone, so the level is still clear in a dense column.
+ */
+const URGENCY = {
+  1: { label: 'רגילה', hue: 210 },
+  2: { label: 'חשובה', hue: 36 },
+  3: { label: 'דחופה', hue: 5 },
+};
+const URGENCY_LEVELS = [3, 2, 1];
+
+function urgencyBadge(level) {
+  const u = URGENCY[level];
+  if (!u) return null;
+  const b = document.createElement('span');
+  b.className = 'urg';
+  b.dataset.level = level;
+  b.style.setProperty('--hue', u.hue);
+  b.title = `דחיפות ${u.label}`;
+  b.setAttribute('aria-label', `דחיפות ${u.label}`);
+  b.innerHTML = '<i></i><i></i><i></i>';
+  return b;
+}
 
 /** Task categories. `null` means the task was never filed under one. */
 const CATEGORY = {
@@ -1663,6 +1694,9 @@ function taskNode(task) {
     meta.append(d);
   }
 
+  const urg = urgencyBadge(task.urgency);
+  if (urg) meta.append(urg);
+
   if (task.category) {
     const c = categoryChip(task.category, { button: true });
     c.title = 'שינוי הקטגוריה';
@@ -1928,6 +1962,20 @@ function openMenu(task, anchor) {
       redrawAll();
       toast('המשימה חזרה לרשימת הסידור');
     }, { role: 'menuitem' });
+  }
+
+  sep();
+  label('דחיפות');
+  for (const lvl of URGENCY_LEVELS) {
+    const on = task.urgency === lvl;
+    item(
+      'menu__item--urg',
+      `<span class="urg" data-level="${lvl}" style="--hue:${URGENCY[lvl].hue}" aria-hidden="true"><i></i><i></i><i></i></span>` +
+      `<span>${URGENCY[lvl].label}</span>` +
+      (on ? `<span class="menu__check">${ICON.check}</span>` : ''),
+      () => { setTaskUrgency(task, lvl); redrawAll(); },
+      { role: 'menuitemradio', 'aria-checked': String(on) },
+    );
   }
 
   sep();
@@ -2273,6 +2321,7 @@ function planInbox() {
     .filter(t => !t.done && (t.unplanned || all || !days.has(t.task_date)))
     .sort((a, b) =>
       Number(!!b.unplanned) - Number(!!a.unplanned)   // waiting to be placed comes first
+      || (b.urgency ?? 0) - (a.urgency ?? 0)          // then the most pressing
       || a.task_date.localeCompare(b.task_date)
       || a.position - b.position);
 }
@@ -2316,7 +2365,9 @@ async function pullPlan() {
 
 /** Moving from the planner. Time already logged today is never dropped silently. */
 function planMove(task, date) {
-  if (!date || date === task.task_date) return;
+  if (!date) return;
+  if (date === task.task_date && !task.unplanned) return;
+  if (date === task.task_date) { moveTask(task, date); renderPlan(); toast(`${task.title} → ${relativeLabel(date)}`); return; }
   const from = task.task_date;
   const finish = () => {
     renderPlan();
@@ -2350,6 +2401,8 @@ function planCard(task, { showDate = false } = {}) {
 
   const meta = document.createElement('div');
   meta.className = 'plancard__meta';
+  const badge = urgencyBadge(task.urgency);
+  if (badge) meta.append(badge);
   if (showDate) {
     const d = document.createElement('span');
     d.className = 'plancard__date';
@@ -5502,7 +5555,7 @@ $('#repMonth').addEventListener('click', () => { reportMode = 'month'; reportMon
    CLOUD  (Supabase)
    ============================================================ */
 const COLS = 'id,task_date,title,done,completed_at,status,collapsed,position,subtasks,' +
-             'client,category,unplanned,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
+             'client,category,unplanned,urgency,planned_at,started_at,finished_at,moved_from,sessions,created_at,updated_at';
 
 const toRow = t => ({
   id: t.id,
@@ -5518,6 +5571,7 @@ const toRow = t => ({
   client: t.client ?? null,
   category: t.category ?? null,
   unplanned: !!t.unplanned,
+  urgency: t.urgency ?? null,
   planned_at: t.planned_at ?? null,
   started_at: t.started_at ?? null,
   finished_at: t.finished_at ?? null,

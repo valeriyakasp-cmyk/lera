@@ -775,6 +775,24 @@ a { color: var(--blue-900); }
 .chip--client:hover { background: hsl(var(--hue, 210) 72% 89%); }
 .chip--pick { height: 28px; font-size: 12.5px; cursor: pointer; }
 
+/* דחיפות — שלושה פסים שנקראים במבט, לא רק צבע */
+.urg {
+  display: inline-flex; align-items: flex-end; gap: 1.5px;
+  height: 11px; flex: none;
+}
+.urg i {
+  display: block; width: 3px;
+  background: var(--ink-4); border-radius: 1px;
+}
+.urg i:nth-child(1) { height: 5px; }
+.urg i:nth-child(2) { height: 8px; }
+.urg i:nth-child(3) { height: 11px; }
+.urg[data-level="1"] i:nth-child(1),
+.urg[data-level="2"] i:nth-child(-n+2),
+.urg[data-level="3"] i { background: hsl(var(--hue, 210) 68% 50%); }
+
+.menu__item--urg .urg { margin-inline-end: 2px; }
+
 /* קטגוריה — עבודה / שיווק אישי / אישי */
 .chip--cat {
   background: hsl(var(--hue, 212) 68% 94%);
@@ -1938,10 +1956,10 @@ body.is-reordering { user-select: none; -webkit-user-select: none; cursor: grabb
 .plancard__more:hover { background: var(--card); color: var(--ink); }
 .plancard.is-dragging { opacity: .35; }
 .plancard--ghost {
-  position: fixed; inset-block-start: 0; inset-inline-start: 0;
+  position: fixed; top: 0; left: 0;
   z-index: 60; pointer-events: none;
   box-shadow: var(--sh-3); transform-origin: top left;
-  rotate: -1.5deg;
+  rotate: -1.5deg; will-change: transform;
 }
 body.is-planning { cursor: grabbing; user-select: none; }
 
