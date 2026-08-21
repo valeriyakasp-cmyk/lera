@@ -2636,6 +2636,12 @@ function onPlanMove(e) {
     if (e.clientX < gr.left + edge)       grid.scrollLeft -= 14;
     else if (e.clientX > gr.right - edge) grid.scrollLeft += 14;
   }
+
+  // and the page itself scrolls, so the board and the drawer are reachable
+  // from one another even when only one of them fits on screen
+  const band = 90;
+  if (e.clientY > innerHeight - band)  scrollBy(0,  Math.min(18, (e.clientY - (innerHeight - band)) / 3));
+  else if (e.clientY < band)           scrollBy(0, -Math.min(18, (band - e.clientY) / 3));
 }
 
 function endPlanDrag() {
