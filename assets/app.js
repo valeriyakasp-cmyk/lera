@@ -2089,8 +2089,12 @@ function place(menu, anchor) {
 
 function moveNow(task, date) {
   const node = $(`.task[data-id="${task.id}"]`);
+  const refresh = () => (appMode === 'plan' ? renderPlan() : render());
   moveTask(task, date);
-  animateOut(node, () => { render(); pull().then(render); });
+  animateOut(node, () => {
+    refresh();
+    (appMode === 'plan' ? pullPlan() : pull()).then(refresh);
+  });
   toast(`המשימה הועברה ל${relativeLabel(date)}`);
 }
 
@@ -2553,6 +2557,9 @@ function renderPlan() {
     if (n) n.textContent = inbox.length;
   }
 
+  const box = $('#planInboxBox');
+  if (box) box.dataset.drop = 'inbox';
+
   const scope = $('#planInboxScope');
   if (scope) {
     scope.hidden = !openDrawer;
@@ -2614,7 +2621,7 @@ function onPlanMove(e) {
   const under = document.elementFromPoint(e.clientX, e.clientY);
   pdrag.ghost.style.visibility = '';
 
-  const zone = under?.closest('[data-drop="day"]') ?? null;
+  const zone = under?.closest('[data-drop]') ?? null;
   if (zone !== pdrag.over) {
     pdrag.over?.classList.remove('is-over');
     pdrag.over = zone;
@@ -2645,7 +2652,15 @@ function endPlanDrag() {
   node.classList.remove('is-dragging');
   document.body.classList.remove('is-planning');
 
-  if (moved && over) planMove(task, over.dataset.date);
+  if (!moved || !over) return;
+  if (over.dataset.drop === 'inbox') {
+    if (task.unplanned) return;
+    unplanTask(task);
+    renderPlan();
+    toast(`${task.title} חזרה לרשימת הסידור`);
+    return;
+  }
+  planMove(task, over.dataset.date);
 }
 
 /* ============================================================
@@ -2923,7 +2938,7 @@ function commitDate() {
   const date = dateSheet.input?.value;
   if (!task || !date) return closeDateSheet();
   closeDateSheet();
-  if (date === task.task_date) return;
+  if (date === task.task_date && !task.unplanned) return;
   doMove(task, date);
 }
 
